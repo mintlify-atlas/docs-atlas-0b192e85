@@ -1,0 +1,128 @@
+{
+  "projectType": "infrastructure",
+  "projectName": "Kimbernetes K8s Flux",
+  "projectDescription": "FluxCD GitOps repository for managing the Kimawesome Kubernetes cluster infrastructure and applications",
+  "theme": "aspen",
+  "primaryColor": "#5468ff",
+  "lightColor": "#7b8eff",
+  "darkColor": "#3d4ecc",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Getting Started",
+            "pages": [
+              "introduction",
+              "quickstart"
+            ]
+          },
+          {
+            "group": "Setup & Deployment",
+            "pages": [
+              "setup/prerequisites",
+              "setup/cluster-installation",
+              "setup/flux-bootstrap",
+              "setup/initial-configuration"
+            ]
+          },
+          {
+            "group": "Architecture",
+            "pages": [
+              "architecture/overview",
+              "architecture/repository-structure",
+              "architecture/flux-components",
+              "architecture/kustomize-overlays"
+            ]
+          },
+          {
+            "group": "Infrastructure Components",
+            "pages": [
+              "infrastructure/networking",
+              "infrastructure/load-balancer",
+              "infrastructure/cert-manager",
+              "infrastructure/sealed-secrets",
+              "infrastructure/metrics-server",
+              "infrastructure/gateway-api"
+            ]
+          },
+          {
+            "group": "Observability",
+            "pages": [
+              "observability/overview",
+              "observability/grafana-stack",
+              "observability/prometheus",
+              "observability/alloy",
+              "observability/loki"
+            ]
+          },
+          {
+            "group": "Applications",
+            "pages": [
+              "applications/overview",
+              "applications/dns-server",
+              "applications/tooling",
+              "applications/version-management"
+            ]
+          },
+          {
+            "group": "Operations",
+            "pages": [
+              "operations/managing-resources",
+              "operations/troubleshooting",
+              "operations/upgrades",
+              "operations/backup-restore"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Reference",
+        "groups": [
+          {
+            "group": "Configuration",
+            "pages": [
+              "reference/flux-kustomizations",
+              "reference/helm-releases",
+              "reference/base-overlays",
+              "reference/environment-overlays"
+            ]
+          },
+          {
+            "group": "Resources",
+            "pages": [
+              "reference/useful-commands",
+              "reference/external-resources"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "GitOps-based cluster management with FluxCD",
+    "Kustomize overlay pattern for environment-specific configurations",
+    "Comprehensive observability stack with Grafana, Prometheus, and Loki",
+    "Automated certificate management with cert-manager",
+    "Load balancing with MetalLB",
+    "Secure secrets management with sealed-secrets",
+    "Gateway API support with Cilium and kgateway",
+    "Infrastructure and application lifecycle management"
+  ],
+  "publicApiSurface": [
+    "FluxCD GitRepository: flux-system",
+    "FluxCD Kustomization: overlays",
+    "HelmRelease: cert-manager",
+    "HelmRelease: grafana-operator",
+    "HelmRelease: grafana-alloy",
+    "HelmRelease: grafana-loki",
+    "HelmRelease: prometheus",
+    "HelmRelease: metallb",
+    "HelmRelease: sealed-secrets",
+    "HelmRelease: metrics-server",
+    "HelmRelease: kgateway",
+    "Deployment: bind9",
+    "Deployment: knowledge-hub"
+  ]
+}
