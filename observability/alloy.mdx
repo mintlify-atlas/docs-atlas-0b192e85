@@ -1,0 +1,450 @@
+---
+title: Grafana Alloy
+description: Unified telemetry collector for logs, metrics, and events
+---
+
+Grafana Alloy is deployed as the primary telemetry collection agent in the Kimbernetes cluster. It runs as a DaemonSet on every node, collecting logs, metrics, and events, then routing them to appropriate backends (Loki for logs, Prometheus for metrics).
+
+## HelmRelease Configuration
+
+Alloy is deployed using the `k8s-monitoring` Helm chart:
+
+```yaml overlays/base/grafana/grafana-alloy/helm-release.yaml
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: grafana-alloy
+spec:
+  timeout: 15m
+  chart:
+    spec:
+      chart: k8s-monitoring
+      sourceRef:
+        kind: HelmRepository
+        name: grafana
+      version: 3.2.2
+  interval: 24h
+  releaseName: grafana-monitoring
+  install:
+    crds: Create
+  upgrade:
+    crds: CreateReplace
+```
+
+<Note>
+  The `k8s-monitoring` chart includes Alloy configured specifically for Kubernetes observability with sensible defaults.
+</Note>
+
+## Architecture
+
+Alloy is deployed in multiple modes:
+
+- **alloy-logs**: DaemonSet for pod log collection
+- **alloy-singleton**: Single instance for cluster-wide event collection
+- **alloy-metrics**: Metrics collection (disabled in favor of Prometheus ServiceMonitors)
+
+```yaml
+alloy-logs:
+  enabled: true
+  enableReporting: false
+  
+alloy-singleton:
+  enabled: true
+  enableReporting: false
+  
+alloy-metrics:
+  enabled: false
+  
+alloy-receiver:
+  enabled: false
+```
+
+## Log Collection
+
+### Pod Logs
+
+Alloy collects logs from all pods with rich label extraction:
+
+```yaml overlays/base/grafana/grafana-alloy/helm-release.yaml
+podLogs:
+  enabled: true
+  staticLabels:
+    source: "pods"
+  extraDiscoveryRules: |-
+      rule {
+        target_label = "log_source"
+        replacement = "kim7s"
+      }
+      rule {
+        source_labels = ["__meta_kubernetes_pod_controller_name"]
+        regex         = "([0-9a-z-.]+?)(-[0-9a-f]{8,10})?"
+        target_label  = "__tmp_controller_name"
+      }
+      rule {
+        source_labels = ["__meta_kubernetes_pod_label_app_kubernetes_io_name", "__meta_kubernetes_pod_label_app", "__tmp_controller_name", "__meta_kubernetes_pod_name"]
+        regex         = "^;*([^;]+)(;.*)?$"
+        target_label  = "app"
+      }
+      rule {
+        source_labels = ["__meta_kubernetes_pod_label_app_kubernetes_io_instance", "__meta_kubernetes_pod_label_instance"]
+        regex         = "^;*([^;]+)(;.*)?$"
+        target_label  = "instance"
+      }
+      rule {
+        source_labels = ["__meta_kubernetes_pod_node_name"]
+        target_label  = "node_name"
+      }
+      rule {
+        source_labels = ["__meta_kubernetes_pod_container_image"]
+        target_label  = "image"
+      }
+```
+
+#### Extracted Labels
+
+Alloy automatically extracts and preserves these labels:
+
+```yaml
+labelsToKeep:
+- app
+- cluster
+- container
+- flags
+- image
+- log_source
+- namespace
+- node_name
+- pod
+- stream
+- instance
+- source
+```
+
+<Tabs>
+  <Tab title="Application Identification">
+    ```yaml
+    rule {
+      source_labels = [
+        "__meta_kubernetes_pod_label_app_kubernetes_io_name",
+        "__meta_kubernetes_pod_label_app",
+        "__tmp_controller_name",
+        "__meta_kubernetes_pod_name"
+      ]
+      regex         = "^;*([^;]+)(;.*)?$"
+      target_label  = "app"
+    }
+    ```
+    
+    Extracts the application name from standard Kubernetes labels with fallback to controller name.
+  </Tab>
+  
+  <Tab title="Node Information">
+    ```yaml
+    rule {
+      source_labels = ["__meta_kubernetes_pod_node_name"]
+      target_label  = "node_name"
+    }
+    ```
+    
+    Adds the node name to every log line for node-level filtering.
+  </Tab>
+  
+  <Tab title="Container Image">
+    ```yaml
+    rule {
+      source_labels = ["__meta_kubernetes_pod_container_image"]
+      target_label  = "image"
+    }
+    ```
+    
+    Includes the container image for version tracking.
+  </Tab>
+</Tabs>
+
+### Node Logs
+
+Alloy collects logs from systemd journal on each node:
+
+```yaml overlays/base/grafana/grafana-alloy/helm-release.yaml
+nodeLogs:
+  enabled: true
+  labelsToKeep: ["instance","level","name","unit","service_name","source"]
+  journal:
+    units:
+      - kubelet.service
+      - containerd.service
+```
+
+<Note>
+  Node logs are essential for diagnosing infrastructure issues like container runtime problems or kubelet failures.
+</Note>
+
+### Cluster Events
+
+Kubernetes cluster events are collected and forwarded as logs:
+
+```yaml overlays/base/grafana/grafana-alloy/helm-release.yaml
+clusterEvents:
+  enabled: true
+  labelsToKeep: ["level","namespace","node","source"]
+```
+
+Cluster events include:
+- Pod scheduling events
+- Container lifecycle events
+- Volume mount events
+- Resource quota violations
+- Node status changes
+
+## Destinations
+
+Alloy routes logs to Loki via internal service:
+
+```yaml overlays/base/grafana/grafana-alloy/helm-release.yaml
+destinations:
+  - name: loki-grafana-cloud
+    type: loki
+    url: http://loki-monolith.observability.svc:3100/loki/api/v1/push
+```
+
+<Accordion title="Example: Adding Remote Write to Grafana Cloud">
+  ```yaml
+  destinations:
+    - name: loki-local
+      type: loki
+      url: http://loki-monolith.observability.svc:3100/loki/api/v1/push
+    - name: loki-grafana-cloud
+      type: loki
+      url: https://logs-prod-us-central1.grafana.net/loki/api/v1/push
+      auth:
+        username: "12345"
+        passwordFrom:
+          name: grafana-cloud-credentials
+          key: password
+  ```
+</Accordion>
+
+## Metrics Collection
+
+While Alloy can collect metrics, this cluster uses Prometheus ServiceMonitors instead:
+
+```yaml
+clusterMetrics:
+  enabled: false
+  kube-state-metrics:
+    enabled: false
+  cadvisor:
+    enabled: false
+  kubelet:
+    enabled: false
+  node-exporter:
+    enabled: true
+  controlPlane:
+    enabled: false
+  kepler:
+    enabled: true
+  windows-expoter:
+    enabled: false
+  opencost:
+    enabled: false
+```
+
+<Note>
+  Node-exporter and Kepler are enabled for host-level and energy metrics.
+</Note>
+
+## Environment Variables
+
+Alloy instances are configured with environment variables for cluster identification:
+
+```yaml overlays/base/grafana/grafana-alloy/helm-release.yaml
+alloy:
+  extraEnv:
+    - name: CLUSTER_NAME
+      value: ""
+    - name: NAMESPACE
+      valueFrom:
+        fieldRef:
+          fieldPath: metadata.namespace
+    - name: POD_NAME
+      valueFrom:
+        fieldRef:
+          fieldPath: metadata.name
+    - name: NODE_NAME
+      valueFrom:
+        fieldRef:
+          fieldPath: spec.nodeName
+```
+
+## Querying Alloy Logs in Loki
+
+Use LogQL to query logs collected by Alloy:
+
+<CodeGroup>
+  ```logql Pod Logs by App
+  {app="my-app", namespace="default"}
+  ```
+  
+  ```logql Node Logs
+  {unit=~"kubelet.service|containerd.service"}
+  ```
+  
+  ```logql Cluster Events
+  {source="cluster-events", namespace="kube-system"}
+  ```
+  
+  ```logql Error Logs
+  {namespace="default"} |= "error" or "ERROR" or "Error"
+  ```
+  
+  ```logql Logs by Image Version
+  {image=~".*:v1\\.2\\.3"}
+  ```
+</CodeGroup>
+
+## Configuration Customization
+
+To customize Alloy configuration, update the HelmRelease values:
+
+<Steps>
+  <Step title="Edit the HelmRelease">
+    ```bash
+    kubectl edit helmrelease grafana-alloy -n observability
+    ```
+  </Step>
+  
+  <Step title="Add Custom Pipeline">
+    ```yaml
+    values:
+      alloy-logs:
+        alloy:
+          extraConfig: |
+            // Custom Alloy configuration
+            loki.process "custom" {
+              forward_to = [loki.write.default.receiver]
+              
+              stage.regex {
+                expression = ".*(?P<status>\\d{3}).*"
+              }
+              
+              stage.labels {
+                values = {
+                  status = "",
+                }
+              }
+            }
+    ```
+  </Step>
+  
+  <Step title="Wait for Reconciliation">
+    ```bash
+    flux reconcile helmrelease grafana-alloy -n observability
+    ```
+  </Step>
+</Steps>
+
+## Access Policy
+
+The cluster includes a SealedSecret for Grafana Cloud access:
+
+```yaml overlays/kimawesome/infrastructure/observability/grafana-alloy/access-policy.sealed.yaml
+apiVersion: bitnami.com/v1alpha1
+kind: SealedSecret
+metadata:
+  name: grafana-cloud-credentials
+  namespace: observability
+```
+
+<Warning>
+  This SealedSecret must be decrypted by the sealed-secrets controller. Ensure the controller is running before deploying Alloy with remote write enabled.
+</Warning>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Alloy pods not starting">
+    Check DaemonSet status:
+    
+    ```bash
+    kubectl get daemonset -n observability -l app.kubernetes.io/name=alloy
+    kubectl describe daemonset grafana-monitoring-alloy-logs -n observability
+    ```
+    
+    View pod logs:
+    
+    ```bash
+    kubectl logs -n observability -l app.kubernetes.io/name=alloy-logs
+    ```
+  </Accordion>
+  
+  <Accordion title="Logs not appearing in Loki">
+    Verify Loki endpoint:
+    
+    ```bash
+    kubectl run -it --rm debug --image=curlimages/curl --restart=Never -- \
+      curl http://loki-monolith.observability.svc:3100/ready
+    ```
+    
+    Check Alloy write metrics:
+    
+    ```bash
+    kubectl port-forward -n observability ds/grafana-monitoring-alloy-logs 12345:12345
+    curl http://localhost:12345/metrics | grep loki_write
+    ```
+  </Accordion>
+  
+  <Accordion title="Missing labels on logs">
+    Review discovery rules in HelmRelease:
+    
+    ```bash
+    kubectl get helmrelease grafana-alloy -n observability -o yaml | grep -A 50 extraDiscoveryRules
+    ```
+    
+    Check Alloy debug UI:
+    
+    ```bash
+    kubectl port-forward -n observability ds/grafana-monitoring-alloy-logs 12345:12345
+    # Open http://localhost:12345
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Performance Tuning
+
+For high-volume environments, consider these optimizations:
+
+```yaml
+values:
+  alloy-logs:
+    alloy:
+      resources:
+        limits:
+          memory: 1Gi
+        requests:
+          memory: 512Mi
+          cpu: 500m
+  global:
+    scrapeInterval: 5m  # Reduce frequency for less critical metrics
+  podLogs:
+    maxRecordAge: 5m    # Only process recent logs
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Query in Loki" href="./loki">
+    Search and analyze collected logs
+  </Card>
+  
+  <Card title="Visualize in Grafana" href="./grafana-stack">
+    Create dashboards for log patterns
+  </Card>
+  
+  <Card title="Add Metrics" href="./prometheus">
+    Configure ServiceMonitors
+  </Card>
+  
+  <Card title="Overview" href="./overview">
+    Return to observability architecture
+  </Card>
+</CardGroup>

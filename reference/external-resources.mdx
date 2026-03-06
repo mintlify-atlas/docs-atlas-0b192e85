@@ -1,0 +1,329 @@
+---
+title: External Resources
+description: Links to official documentation and external resources for tools used in the cluster
+---
+
+Comprehensive collection of external documentation, guides, and resources for all components used in the Kubernetes cluster.
+
+## Core Technologies
+
+<CardGroup cols={2}>
+  <Card title="Kubernetes" icon="dharmachakra" href="https://kubernetes.io/docs/">
+    Official Kubernetes documentation covering concepts, tasks, and API reference
+  </Card>
+  <Card title="Kubernetes API Reference" icon="book" href="https://kubernetes.io/docs/reference/kubernetes-api/">
+    Complete API reference for all Kubernetes resources
+  </Card>
+  <Card title="kubectl Cheat Sheet" icon="terminal" href="https://kubernetes.io/docs/reference/kubectl/quick-reference/">
+    Quick reference for kubectl commands
+  </Card>
+  <Card title="Kustomize" icon="layer-group" href="https://kubectl.docs.kubernetes.io/">
+    Kustomize documentation and guides for customizing Kubernetes configurations
+  </Card>
+</CardGroup>
+
+## GitOps & Flux
+
+<CardGroup cols={2}>
+  <Card title="Flux Documentation" icon="git-alt" href="https://fluxcd.io/flux/">
+    Complete Flux CD documentation for GitOps continuous delivery
+  </Card>
+  <Card title="Flux Guides" icon="book-open" href="https://fluxcd.io/flux/guides/">
+    Step-by-step guides for common Flux operations
+  </Card>
+  <Card title="Flux CLI Reference" icon="terminal" href="https://fluxcd.io/flux/cmd/">
+    Command reference for the Flux CLI
+  </Card>
+  <Card title="Flux GitHub" icon="github" href="https://github.com/fluxcd/flux2">
+    Flux source code and issue tracker
+  </Card>
+</CardGroup>
+
+### Flux Components
+
+<CardGroup cols={2}>
+  <Card title="Kustomize Controller" icon="cog" href="https://fluxcd.io/flux/components/kustomize/">
+    Documentation for the Kustomization custom resource
+  </Card>
+  <Card title="Helm Controller" icon="chart-simple" href="https://fluxcd.io/flux/components/helm/">
+    Documentation for HelmRelease and HelmRepository resources
+  </Card>
+  <Card title="Source Controller" icon="code-branch" href="https://fluxcd.io/flux/components/source/">
+    Documentation for GitRepository, Bucket, and other sources
+  </Card>
+  <Card title="Notification Controller" icon="bell" href="https://fluxcd.io/flux/components/notification/">
+    Alerts and notifications for Flux events
+  </Card>
+</CardGroup>
+
+## Networking
+
+<CardGroup cols={2}>
+  <Card title="Cilium Documentation" icon="network-wired" href="https://docs.cilium.io/">
+    Cilium CNI documentation covering networking, security, and observability
+  </Card>
+  <Card title="Cilium CLI Reference" icon="terminal" href="https://docs.cilium.io/en/stable/cmdref/">
+    Command reference for the Cilium CLI
+  </Card>
+  <Card title="Cilium Network Policies" icon="shield" href="https://docs.cilium.io/en/stable/security/policy/">
+    Network policy configuration and examples
+  </Card>
+  <Card title="Cilium GitHub" icon="github" href="https://github.com/cilium/cilium">
+    Cilium source code and releases
+  </Card>
+</CardGroup>
+
+### Service Mesh & Gateway
+
+<CardGroup cols={2}>
+  <Card title="Gateway API" icon="door-open" href="https://gateway-api.sigs.k8s.io/">
+    Kubernetes Gateway API documentation
+  </Card>
+  <Card title="Gateway API Guides" icon="book" href="https://gateway-api.sigs.k8s.io/guides/">
+    Implementation guides for Gateway API
+  </Card>
+  <Card title="MetalLB" icon="balance-scale" href="https://metallb.universe.tf/">
+    MetalLB load balancer documentation
+  </Card>
+  <Card title="MetalLB Configuration" icon="wrench" href="https://metallb.universe.tf/configuration/">
+    Configuration reference for MetalLB
+  </Card>
+</CardGroup>
+
+## Certificates & Security
+
+<CardGroup cols={2}>
+  <Card title="cert-manager" icon="certificate" href="https://cert-manager.io/docs/">
+    Complete cert-manager documentation for TLS certificate management
+  </Card>
+  <Card title="cert-manager Configuration" icon="file-code" href="https://cert-manager.io/docs/configuration/">
+    Configuration guides for issuers and certificates
+  </Card>
+  <Card title="Let's Encrypt" icon="lock" href="https://letsencrypt.org/docs/">
+    Let's Encrypt documentation for free TLS certificates
+  </Card>
+  <Card title="Sealed Secrets" icon="key" href="https://sealed-secrets.netlify.app/">
+    Sealed Secrets documentation for encrypting secrets in Git
+  </Card>
+  <Card title="Sealed Secrets GitHub" icon="github" href="https://github.com/bitnami-labs/sealed-secrets">
+    Source code and releases
+  </Card>
+</CardGroup>
+
+## Observability
+
+<CardGroup cols={2}>
+  <Card title="Prometheus" icon="chart-line" href="https://prometheus.io/docs/">
+    Prometheus monitoring system documentation
+  </Card>
+  <Card title="Prometheus Operator" icon="cog" href="https://prometheus-operator.dev/">
+    Kubernetes Prometheus Operator documentation
+  </Card>
+  <Card title="kube-prometheus-stack" icon="chart-area" href="https://github.com/prometheus-community/helm-charts/tree/main/charts/kube-prometheus-stack">
+    Complete monitoring stack Helm chart documentation
+  </Card>
+  <Card title="Alertmanager" icon="bell" href="https://prometheus.io/docs/alerting/latest/alertmanager/">
+    Alert routing and notification configuration
+  </Card>
+</CardGroup>
+
+### Grafana Stack
+
+<CardGroup cols={2}>
+  <Card title="Grafana" icon="chart-simple" href="https://grafana.com/docs/grafana/latest/">
+    Grafana visualization and dashboards documentation
+  </Card>
+  <Card title="Grafana Operator" icon="cog" href="https://grafana.github.io/grafana-operator/">
+    Kubernetes operator for managing Grafana instances
+  </Card>
+  <Card title="Grafana Loki" icon="database" href="https://grafana.com/docs/loki/latest/">
+    Log aggregation system documentation
+  </Card>
+  <Card title="Grafana Alloy" icon="satellite-dish" href="https://grafana.com/docs/alloy/latest/">
+    Telemetry collection and forwarding
+  </Card>
+  <Card title="LogQL" icon="code" href="https://grafana.com/docs/loki/latest/query/">
+    Loki query language reference
+  </Card>
+  <Card title="PromQL" icon="search" href="https://prometheus.io/docs/prometheus/latest/querying/basics/">
+    Prometheus query language reference
+  </Card>
+</CardGroup>
+
+## Helm Charts
+
+<CardGroup cols={2}>
+  <Card title="Helm Documentation" icon="compass" href="https://helm.sh/docs/">
+    Official Helm package manager documentation
+  </Card>
+  <Card title="Helm Chart Repositories" icon="boxes-stacked" href="https://artifacthub.io/">
+    Artifact Hub - Search for Helm charts
+  </Card>
+  <Card title="cert-manager Chart" icon="chart-simple" href="https://artifacthub.io/packages/helm/cert-manager/cert-manager">
+    Official cert-manager Helm chart
+  </Card>
+  <Card title="Prometheus Stack Chart" icon="chart-area" href="https://artifacthub.io/packages/helm/prometheus-community/kube-prometheus-stack">
+    kube-prometheus-stack Helm chart
+  </Card>
+  <Card title="Grafana Operator Chart" icon="chart-line" href="https://artifacthub.io/packages/helm/grafana/grafana-operator">
+    Grafana Operator Helm chart
+  </Card>
+  <Card title="MetalLB Chart" icon="balance-scale" href="https://artifacthub.io/packages/helm/metallb/metallb">
+    MetalLB Helm chart
+  </Card>
+</CardGroup>
+
+## Storage
+
+<CardGroup cols={2}>
+  <Card title="Kubernetes Storage" icon="hard-drive" href="https://kubernetes.io/docs/concepts/storage/">
+    Storage concepts including volumes and persistent volumes
+  </Card>
+  <Card title="Storage Classes" icon="database" href="https://kubernetes.io/docs/concepts/storage/storage-classes/">
+    Dynamic volume provisioning configuration
+  </Card>
+  <Card title="Persistent Volumes" icon="hdd" href="https://kubernetes.io/docs/concepts/storage/persistent-volumes/">
+    PersistentVolume and PersistentVolumeClaim documentation
+  </Card>
+</CardGroup>
+
+## Applications
+
+<CardGroup cols={2}>
+  <Card title="n8n Documentation" icon="workflow" href="https://docs.n8n.io/">
+    n8n workflow automation documentation
+  </Card>
+  <Card title="n8n Helm Chart" icon="chart-simple" href="https://artifacthub.io/packages/helm/n8n/n8n">
+    Official n8n Helm chart
+  </Card>
+  <Card title="Tailscale" icon="shield" href="https://tailscale.com/kb/">
+    Tailscale VPN documentation
+  </Card>
+  <Card title="Tailscale Operator" icon="cog" href="https://tailscale.com/kb/1236/kubernetes-operator">
+    Tailscale Kubernetes operator documentation
+  </Card>
+</CardGroup>
+
+## Development Tools
+
+<CardGroup cols={2}>
+  <Card title="k9s" icon="terminal" href="https://k9scli.io/">
+    Terminal UI for managing Kubernetes clusters
+  </Card>
+  <Card title="kubectx & kubens" icon="arrows-turn-to-dots" href="https://github.com/ahmetb/kubectx">
+    Switch between clusters and namespaces easily
+  </Card>
+  <Card title="stern" icon="file-lines" href="https://github.com/stern/stern">
+    Multi-pod and container log tailing
+  </Card>
+  <Card title="kube-ps1" icon="terminal" href="https://github.com/jonmosco/kube-ps1">
+    Kubernetes context in your shell prompt
+  </Card>
+</CardGroup>
+
+## Best Practices & Patterns
+
+<CardGroup cols={2}>
+  <Card title="Kubernetes Patterns" icon="book" href="https://k8spatterns.io/">
+    Design patterns for cloud-native applications
+  </Card>
+  <Card title="12 Factor App" icon="list-ol" href="https://12factor.net/">
+    Methodology for building modern applications
+  </Card>
+  <Card title="CNCF Landscape" icon="map" href="https://landscape.cncf.io/">
+    Cloud Native Computing Foundation project landscape
+  </Card>
+  <Card title="GitOps Principles" icon="git-alt" href="https://opengitops.dev/">
+    OpenGitOps principles and standards
+  </Card>
+</CardGroup>
+
+## Troubleshooting Resources
+
+<CardGroup cols={2}>
+  <Card title="Kubernetes Troubleshooting" icon="wrench" href="https://kubernetes.io/docs/tasks/debug/">
+    Official troubleshooting guides
+  </Card>
+  <Card title="Flux Troubleshooting" icon="life-ring" href="https://fluxcd.io/flux/cheatsheets/troubleshooting/">
+    Flux-specific troubleshooting guide
+  </Card>
+  <Card title="Cilium Troubleshooting" icon="stethoscope" href="https://docs.cilium.io/en/stable/operations/troubleshooting/">
+    Network and connectivity troubleshooting
+  </Card>
+  <Card title="cert-manager Troubleshooting" icon="screwdriver-wrench" href="https://cert-manager.io/docs/troubleshooting/">
+    Certificate issuance debugging
+  </Card>
+</CardGroup>
+
+## Community & Support
+
+<CardGroup cols={2}>
+  <Card title="Kubernetes Slack" icon="slack" href="https://kubernetes.slack.com/">
+    Official Kubernetes community Slack workspace
+  </Card>
+  <Card title="CNCF Slack" icon="slack" href="https://cloud-native.slack.com/">
+    Cloud Native Computing Foundation Slack
+  </Card>
+  <Card title="Flux Slack" icon="slack" href="https://cloud-native.slack.com/messages/flux">
+    #flux channel in CNCF Slack
+  </Card>
+  <Card title="Cilium Slack" icon="slack" href="https://cilium.io/slack">
+    Cilium community Slack
+  </Card>
+</CardGroup>
+
+## Learning Resources
+
+<CardGroup cols={2}>
+  <Card title="Kubernetes By Example" icon="graduation-cap" href="https://kubernetesbyexample.com/">
+    Hands-on introduction to Kubernetes
+  </Card>
+  <Card title="Flux Tutorials" icon="book-open" href="https://fluxcd.io/flux/get-started/">
+    Getting started with Flux CD
+  </Card>
+  <Card title="CNCF YouTube" icon="youtube" href="https://www.youtube.com/@cncf">
+    CNCF conference talks and tutorials
+  </Card>
+  <Card title="Kubernetes Documentation" icon="book" href="https://kubernetes.io/docs/tutorials/">
+    Official Kubernetes tutorials
+  </Card>
+</CardGroup>
+
+## GitHub Repositories
+
+Source code and releases for all major components:
+
+<CardGroup cols={2}>
+  <Card title="Kubernetes" icon="github" href="https://github.com/kubernetes/kubernetes">
+    Kubernetes source code
+  </Card>
+  <Card title="Flux" icon="github" href="https://github.com/fluxcd/flux2">
+    Flux CD source code
+  </Card>
+  <Card title="Cilium" icon="github" href="https://github.com/cilium/cilium">
+    Cilium CNI source code
+  </Card>
+  <Card title="cert-manager" icon="github" href="https://github.com/cert-manager/cert-manager">
+    cert-manager source code
+  </Card>
+  <Card title="Prometheus" icon="github" href="https://github.com/prometheus/prometheus">
+    Prometheus monitoring source code
+  </Card>
+  <Card title="Grafana" icon="github" href="https://github.com/grafana/grafana">
+    Grafana visualization source code
+  </Card>
+  <Card title="MetalLB" icon="github" href="https://github.com/metallb/metallb">
+    MetalLB load balancer source code
+  </Card>
+  <Card title="Sealed Secrets" icon="github" href="https://github.com/bitnami-labs/sealed-secrets">
+    Sealed Secrets controller source code
+  </Card>
+</CardGroup>
+
+## Related Documentation
+
+- [Flux Kustomizations](/reference/flux-kustomizations)
+- [HelmReleases Reference](/reference/helm-releases)
+- [Useful Commands](/reference/useful-commands)
+- [Base Overlays](/reference/base-overlays)
+- [Environment Overlays](/reference/environment-overlays)

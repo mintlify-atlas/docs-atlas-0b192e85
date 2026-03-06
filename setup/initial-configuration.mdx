@@ -1,0 +1,286 @@
+---
+title: Initial Configuration
+description: Configure core cluster components and services
+---
+
+After bootstrapping Flux, configure essential cluster components including Gateway API, MetalLB, cert-manager, sealed-secrets, and observability tools.
+
+## Install Gateway API
+
+The Gateway API provides advanced ingress capabilities for Kubernetes.
+
+<Steps>
+  <Step title="Install Gateway API CRDs">
+    Apply the standard Gateway API installation:
+
+    ```bash
+    kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.4.0/standard-install.yaml
+    ```
+  </Step>
+
+  <Step title="Verify installation">
+    ```bash
+    kubectl get crd | grep gateway
+    ```
+
+    You should see Gateway API custom resources like `gateways.gateway.networking.k8s.io` and `httproutes.gateway.networking.k8s.io`.
+  </Step>
+</Steps>
+
+<Note>
+The initial Cilium installation already has Gateway API support enabled. This step installs the Gateway API CRDs that Cilium will use.
+</Note>
+
+## Configure Cilium for Gateway API
+
+Update Cilium to ensure Gateway API and NodePort support are properly configured.
+
+<Steps>
+  <Step title="Upgrade Cilium configuration">
+    ```bash
+    cilium upgrade \
+      --set nodePort.enabled=true \
+      --set gatewayAPI.enabled=true
+    ```
+  </Step>
+
+  <Step title="Verify Cilium configuration">
+    ```bash
+    cilium status
+    cilium config view | grep -E '(nodePort|gatewayAPI)'
+    ```
+  </Step>
+</Steps>
+
+## Add Core Components via Flux
+
+The following components are typically managed through Flux HelmRelease resources. Ensure your repository contains the appropriate manifests.
+
+### Sealed Secrets
+
+Sealed Secrets allows you to encrypt Kubernetes secrets and store them safely in Git.
+
+<Note>
+Add a HelmRelease for sealed-secrets-controller to your Flux repository:
+
+```yaml
+apiVersion: helm.toolkit.fluxcd.io/v2beta1
+kind: HelmRelease
+metadata:
+  name: sealed-secrets
+  namespace: kube-system
+spec:
+  chart:
+    spec:
+      chart: sealed-secrets
+      sourceRef:
+        kind: HelmRepository
+        name: sealed-secrets
+      version: 2.x.x
+  interval: 1h
+```
+</Note>
+
+### cert-manager
+
+cert-manager automates certificate management and renewal.
+
+<Steps>
+  <Step title="Add cert-manager HelmRelease">
+    Create a HelmRelease manifest in your Flux repository for cert-manager.
+  </Step>
+
+  <Step title="Configure ClusterIssuers">
+    After cert-manager is installed, configure ClusterIssuers for Let's Encrypt:
+
+    - **HTTP01 Challenge**: For standard domains
+    - **DNS01 Challenge**: For wildcard certificates (requires DNS provider integration like Cloudflare)
+  </Step>
+</Steps>
+
+<Warning>
+To issue wildcard certificates (e.g., `*.kim.tec.br`), you must use DNS01 challenge with a supported DNS provider like Cloudflare.
+</Warning>
+
+### metrics-server
+
+metrics-server provides resource metrics for kubectl top and HPA.
+
+<Steps>
+  <Step title="Add metrics-server HelmRelease">
+    Include the following configuration for bare-metal clusters:
+
+    ```yaml
+    apiVersion: helm.toolkit.fluxcd.io/v2beta1
+    kind: HelmRelease
+    metadata:
+      name: metrics-server
+      namespace: kube-system
+    spec:
+      chart:
+        spec:
+          chart: metrics-server
+          sourceRef:
+            kind: HelmRepository
+            name: metrics-server
+      values:
+        args:
+          - --kubelet-insecure-tls
+      interval: 1h
+    ```
+
+    <Note>
+    The `--kubelet-insecure-tls` flag is required for bare-metal clusters without properly configured kubelet certificates.
+    </Note>
+  </Step>
+
+  <Step title="Verify metrics-server">
+    ```bash
+    kubectl top nodes
+    kubectl top pods -A
+    ```
+  </Step>
+</Steps>
+
+### MetalLB (Load Balancer)
+
+MetalLB provides load balancer services for bare-metal clusters.
+
+<Note>
+Add MetalLB HelmRelease and configure IP address pools for your network. For more information, see the [MetalLB Configuration documentation](https://metallb.io/configuration/).
+</Note>
+
+## Configure Observability (Alloy)
+
+Grafana Alloy provides unified observability for logs and metrics.
+
+<Steps>
+  <Step title="Add Alloy HelmRelease">
+    Configure Alloy to send telemetry to Grafana Cloud or your observability backend.
+  </Step>
+
+  <Step title="Configure log collection">
+    Set up log collection from cluster workloads.
+  </Step>
+
+  <Step title="Configure metrics collection">
+    Enable metrics collection for cluster and application monitoring.
+  </Step>
+</Steps>
+
+<Note>
+For now, the cluster is configured to use Grafana Cloud for centralized observability.
+</Note>
+
+## DNS Configuration
+
+Configure DNS for accessing cluster services.
+
+### Configure Domain
+
+<Steps>
+  <Step title="Set up DNS records">
+    Configure DNS records for your domain (e.g., `kim.tec.br`):
+
+    - **A records**: Point to your load balancer or node IPs
+    - **CNAME records**: For subdomains
+  </Step>
+
+  <Step title="Create certificates">
+    Use cert-manager to create certificates for your domains:
+
+    ```yaml
+    apiVersion: cert-manager.io/v1
+    kind: Certificate
+    metadata:
+      name: version-management-cert
+      namespace: default
+    spec:
+      secretName: version-management-tls
+      issuerRef:
+        name: letsencrypt-prod
+        kind: ClusterIssuer
+      dnsNames:
+        - version-management.kim.tec.br
+    ```
+  </Step>
+</Steps>
+
+<Warning>
+For wildcard certificates (`*.kim.tec.br`), you need a DNS provider that supports DNS01 challenge. Consider using Cloudflare's free tier for DNS management.
+</Warning>
+
+## Verify Core Components
+
+<Steps>
+  <Step title="Check all Flux kustomizations">
+    ```bash
+    flux get kustomizations
+    ```
+
+    All kustomizations should show "Applied revision" status.
+  </Step>
+
+  <Step title="Verify HelmReleases">
+    ```bash
+    flux get helmreleases -A
+    ```
+
+    All Helm releases should be in "Release reconciliation succeeded" status.
+  </Step>
+
+  <Step title="Check pod health">
+    ```bash
+    kubectl get pods -A
+    ```
+
+    Verify all pods are running successfully.
+  </Step>
+
+  <Step title="Test Gateway API">
+    ```bash
+    kubectl get gateways -A
+    kubectl get httproutes -A
+    ```
+  </Step>
+</Steps>
+
+## Architecture Notes
+
+### Gateway API vs Cilium Gateway
+
+<Note>
+The cluster initially used Cilium's built-in Gateway API implementation but has since migrated to using Kubernetes Gateway (kgateway) with Cilium providing the networking layer.
+</Note>
+
+### CNI Configuration
+
+The cluster uses Cilium with the following networking configuration:
+
+```yaml cilium-values.yaml
+cluster:
+  name: kubernetes
+operator:
+  replicas: 1
+routingMode: tunnel
+tunnelProtocol: vxlan
+gatewayAPI:
+  enabled: true
+```
+
+- **Routing Mode**: Tunnel (VXLAN) for overlay networking
+- **Gateway API**: Enabled for advanced ingress capabilities
+- **Operator**: Single replica (suitable for small clusters)
+
+## Next Steps
+
+Your cluster is now fully configured with:
+
+- GitOps continuous deployment via Flux
+- Networking and security via Cilium
+- Certificate management via cert-manager
+- Secret management via sealed-secrets
+- Observability via Alloy
+- Gateway API for ingress
+
+You can now start deploying applications using Flux by committing manifests to your Git repository.

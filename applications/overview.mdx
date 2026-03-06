@@ -1,0 +1,139 @@
+---
+title: Applications Overview
+description: Overview of applications managed by Flux in the Kimbernetes cluster
+---
+
+## Introduction
+
+The Kimbernetes cluster manages several applications using Flux's GitOps workflow. All applications are organized under `overlays/kimawesome/applications/` and are automatically deployed and kept in sync with the Git repository.
+
+## Application Deployment Strategy
+
+Applications in this cluster follow a layered deployment approach:
+
+1. **Base Configuration** - Generic application manifests in `overlays/base/`
+2. **Overlay Customization** - Environment-specific patches in `overlays/kimawesome/applications/`
+3. **Flux Reconciliation** - Continuous sync and automatic deployment
+
+<Note>
+All applications use Kustomize for configuration management, allowing for base definitions with environment-specific overlays.
+</Note>
+
+## Managed Applications
+
+The cluster currently manages the following applications:
+
+<CardGroup cols={2}>
+  <Card title="DNS Server" icon="network-wired" href="/applications/dns-server">
+    BIND9 DNS server for internal network resolution
+  </Card>
+  
+  <Card title="Tooling" icon="wrench" href="/applications/tooling">
+    Developer tools including n8n workflow automation and Yopass secret sharing
+  </Card>
+  
+  <Card title="Version Management" icon="code-branch" href="/applications/version-management">
+    Version tracking system with MySQL database backend
+  </Card>
+  
+  <Card title="Knowledge Hub" icon="book">
+    Documentation and knowledge base application
+  </Card>
+</CardGroup>
+
+## Directory Structure
+
+```
+overlays/kimawesome/applications/
+├── kustomization.yaml           # Main applications manifest
+├── dns-server/                  # DNS server configuration
+│   ├── config/                  # Zone files and BIND config
+│   ├── namespace.yaml
+│   └── kustomization.yaml
+├── tooling/                     # Developer tools
+│   ├── n8n/                     # Workflow automation
+│   ├── yopass/                  # Secret sharing
+│   └── no/                      # Additional tooling
+├── version-management/          # Version tracking system
+│   ├── mysql/                   # Database deployment
+│   ├── shared-resources/        # Shared configs and secrets
+│   └── httproute.yaml          # Ingress routing
+└── steering-k8s/               # Cluster management tools
+```
+
+## Application Categories
+
+### Infrastructure Services
+
+- **DNS Server**: Provides internal DNS resolution for the cluster and local network
+- **Knowledge Hub**: Internal documentation and knowledge management
+
+### Developer Tooling
+
+- **n8n**: Workflow automation platform for building integrations
+- **Yopass**: Secure secret sharing with time-limited access
+
+### Custom Applications
+
+- **Version Management**: Custom application for tracking software versions with MySQL backend
+
+## Common Configuration Patterns
+
+<Tabs>
+  <Tab title="Namespace Isolation">
+    Each application group runs in its own namespace:
+    
+    ```yaml
+    namespace: dns-server
+    namespace: tooling
+    namespace: version-management
+    ```
+  </Tab>
+  
+  <Tab title="ConfigMap Generation">
+    Applications use Kustomize's configMapGenerator for configuration:
+    
+    ```yaml
+    configMapGenerator:
+      - name: bind9-config
+        files:
+          - "internal-kim-tec-br.zone=config/internal-kim-tec-br.zone"
+          - "named.conf=config/named.conf"
+    ```
+  </Tab>
+  
+  <Tab title="HTTPRoute Integration">
+    Applications are exposed via Gateway API HTTPRoutes:
+    
+    ```yaml
+    apiVersion: gateway.networking.k8s.io/v1
+    kind: HTTPRoute
+    metadata:
+      name: app-route
+    spec:
+      parentRefs:
+        - name: https-gateway
+          namespace: kube-system
+    ```
+  </Tab>
+</Tabs>
+
+## Accessing Applications
+
+Applications are accessible through different methods depending on their configuration:
+
+- **Internal DNS**: `app.internal.kim.tec.br` for cluster-internal services
+- **Public DNS**: `app.kim.tec.br` for externally exposed services
+- **LoadBalancer**: Direct IP access for infrastructure services like DNS
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Deploy an Application" href="/operations/managing-resources">
+    Learn how to add a new application to the cluster
+  </Card>
+  
+  <Card title="Configure DNS" href="/applications/dns-server">
+    Set up DNS records for your applications
+  </Card>
+</CardGroup>

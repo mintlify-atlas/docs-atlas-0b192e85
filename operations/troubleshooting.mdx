@@ -1,0 +1,502 @@
+---
+title: Troubleshooting
+description: Diagnose and resolve common issues with Flux and Kubernetes resources
+---
+
+## Overview
+
+This guide covers common issues you may encounter when operating the Kimbernetes cluster and how to resolve them.
+
+## Diagnostic Commands
+
+### Check Flux Status
+
+```bash
+# Check all Flux resources
+flux check
+
+# View Flux controller status
+flux get all
+
+# Check specific Kustomization
+flux get kustomization flux-system
+
+# Check HelmReleases
+flux get helmreleases -A
+```
+
+### View Logs
+
+```bash
+# View all Flux controller logs
+flux logs --all-namespaces --level=error
+
+# View specific controller logs
+kubectl -n flux-system logs -l app=source-controller --tail=100
+kubectl -n flux-system logs -l app=kustomize-controller --tail=100
+kubectl -n flux-system logs -l app=helm-controller --tail=100
+
+# Follow logs in real-time
+flux logs --follow --kind=Kustomization --name=flux-system
+```
+
+### Inspect Resources
+
+```bash
+# Describe a HelmRelease
+kubectl -n flux-system describe helmrelease cert-manager
+
+# Check pod status
+kubectl get pods -A | grep -v Running
+
+# View events
+kubectl get events -A --sort-by='.lastTimestamp' | tail -20
+```
+
+## Common Issues
+
+<Accordion title="Kustomization Reconciliation Failed">
+  **Symptoms:**
+  - Kustomization shows `False` status
+  - Changes in Git are not applied to cluster
+  - Error: "kustomize build failed"
+  
+  **Diagnosis:**
+  ```bash
+  flux get kustomization flux-system
+  kubectl -n flux-system describe kustomization flux-system
+  flux logs --kind=Kustomization --name=flux-system
+  ```
+  
+  **Common Causes:**
+  
+  1. **Invalid YAML syntax**
+     ```bash
+     # Validate YAML locally
+     kubectl kustomize overlays/kimawesome/
+     ```
+     Fix syntax errors in your YAML files and commit.
+  
+  2. **Missing resource files**
+     ```bash
+     # Check kustomization.yaml references
+     cat overlays/base/myapp/kustomization.yaml
+     ```
+     Ensure all referenced files exist.
+  
+  3. **Namespace doesn't exist**
+     Create the namespace first or add it to your kustomization:
+     ```yaml
+     # overlays/base/myapp/namespace.yaml
+     apiVersion: v1
+     kind: Namespace
+     metadata:
+       name: myapp
+     ```
+  
+  **Resolution:**
+  1. Fix the issue in your Git repository
+  2. Commit and push changes
+  3. Force reconciliation:
+     ```bash
+     flux reconcile kustomization flux-system --with-source
+     ```
+</Accordion>
+
+<Accordion title="HelmRelease Failed to Install">
+  **Symptoms:**
+  - HelmRelease status shows `False`
+  - Error: "installation failed" or "upgrade failed"
+  - Application not running
+  
+  **Diagnosis:**
+  ```bash
+  flux get helmreleases -A
+  kubectl -n flux-system describe helmrelease cert-manager
+  flux logs --kind=HelmRelease --name=cert-manager -n flux-system
+  ```
+  
+  **Common Causes:**
+  
+  1. **Chart version not found**
+     ```
+     Error: chart version "=1.99.0" not found
+     ```
+     Check available versions:
+     ```bash
+     helm search repo cert-manager --versions
+     ```
+     Update to a valid version in `helm-release.yaml`.
+  
+  2. **HelmRepository not ready**
+     ```bash
+     flux get sources helm -A
+     ```
+     Reconcile the repository:
+     ```bash
+     flux reconcile source helm cert-manager -n cert-manager
+     ```
+  
+  3. **Invalid Helm values**
+     ```bash
+     # Test Helm values locally
+     helm template myapp charts/myapp --values test-values.yaml
+     ```
+     Fix invalid values in the HelmRelease spec.
+  
+  4. **Resource conflicts**
+     ```
+     Error: rendered manifests contain a resource that already exists
+     ```
+     Check for duplicate resources:
+     ```bash
+     kubectl get all -A | grep myapp
+     ```
+     Delete conflicting resources or adjust the HelmRelease.
+  
+  **Resolution:**
+  1. Fix the issue in the HelmRelease definition
+  2. Commit and push
+  3. Force reconciliation:
+     ```bash
+     flux reconcile helmrelease cert-manager -n flux-system
+     ```
+  
+  If stuck, uninstall and reinstall:
+  ```bash
+  flux suspend helmrelease myapp -n flux-system
+  helm uninstall myapp -n myapp
+  flux resume helmrelease myapp -n flux-system
+  ```
+</Accordion>
+
+<Accordion title="Flux Controllers Not Running">
+  **Symptoms:**
+  - No reconciliation happening
+  - Flux pods in CrashLoopBackOff
+  - Error: "connection refused" to Flux API
+  
+  **Diagnosis:**
+  ```bash
+  kubectl -n flux-system get pods
+  kubectl -n flux-system logs <pod-name>
+  flux check
+  ```
+  
+  **Common Causes:**
+  
+  1. **Resource limits**
+     Pods being OOMKilled:
+     ```bash
+     kubectl -n flux-system describe pod <pod-name> | grep -A 5 "Last State"
+     ```
+     Increase memory limits in `cluster/kimawesome/flux-system/gotk-components.yaml`.
+  
+  2. **Network policy blocking**
+     Check network policies:
+     ```bash
+     kubectl -n flux-system get networkpolicies
+     ```
+     Ensure `allow-egress` policy exists (already configured in Flux v2.7.5).
+  
+  3. **Image pull issues**
+     ```bash
+     kubectl -n flux-system describe pod <pod-name> | grep -A 5 "Events"
+     ```
+     Check image registry connectivity.
+  
+  **Resolution:**
+  ```bash
+  # Restart Flux controllers
+  flux suspend kustomization flux-system
+  kubectl -n flux-system delete pod -l app=source-controller
+  kubectl -n flux-system delete pod -l app=kustomize-controller
+  flux resume kustomization flux-system
+  ```
+</Accordion>
+
+<Accordion title="Git Repository Authentication Failed">
+  **Symptoms:**
+  - Error: "authentication required" or "permission denied"
+  - GitRepository shows `False` status
+  - No reconciliation from Git
+  
+  **Diagnosis:**
+  ```bash
+  flux get sources git
+  kubectl -n flux-system describe gitrepository flux-system
+  ```
+  
+  **Resolution:**
+  
+  1. **Check secret exists:**
+     ```bash
+     kubectl -n flux-system get secret flux-system
+     ```
+  
+  2. **Verify SSH key:**
+     ```bash
+     kubectl -n flux-system get secret flux-system -o jsonpath='{.data.identity}' | base64 -d
+     ```
+  
+  3. **Test Git access manually:**
+     ```bash
+     ssh -T git@github.com
+     ```
+  
+  4. **Regenerate deploy key:**
+     ```bash
+     flux create secret git flux-system \
+       --url=ssh://git@github.com/kim-ae/kimbernetes-k8s-flux \
+       --namespace=flux-system
+     ```
+     Add the public key to GitHub repository deploy keys.
+</Accordion>
+
+<Accordion title="Certificate Issues">
+  **Symptoms:**
+  - Ingress shows certificate errors
+  - Error: "certificate not ready"
+  - cert-manager pods failing
+  
+  **Diagnosis:**
+  ```bash
+  kubectl get certificates -A
+  kubectl describe certificate <cert-name> -n <namespace>
+  kubectl get certificaterequests -A
+  kubectl -n cert-manager logs -l app=cert-manager
+  ```
+  
+  **Common Causes:**
+  
+  1. **DNS not propagated**
+     Wait for DNS to propagate:
+     ```bash
+     nslookup version-management.kim.tec.br
+     ```
+  
+  2. **HTTP01 challenge failed**
+     Check ingress is accessible:
+     ```bash
+     curl -v http://version-management.kim.tec.br/.well-known/acme-challenge/test
+     ```
+  
+  3. **Rate limit hit**
+     Let's Encrypt rate limits reached. Wait or use staging:
+     ```yaml
+     spec:
+       issuerRef:
+         name: letsencrypt-staging
+     ```
+  
+  **Resolution:**
+  1. Delete failed certificate:
+     ```bash
+     kubectl delete certificate <cert-name> -n <namespace>
+     ```
+  2. Delete certificate request:
+     ```bash
+     kubectl delete certificaterequest --all -n <namespace>
+     ```
+  3. Let cert-manager retry automatically
+</Accordion>
+
+<Accordion title="Network Connectivity Issues">
+  **Symptoms:**
+  - Pods cannot reach external services
+  - DNS resolution failing
+  - Inter-pod communication broken
+  
+  **Diagnosis:**
+  ```bash
+  # Test DNS
+  kubectl run test --image=busybox --rm -it -- nslookup google.com
+  
+  # Test external connectivity
+  kubectl run test --image=curlimages/curl --rm -it -- curl -v https://google.com
+  
+  # Check Cilium status
+  cilium status
+  cilium connectivity test
+  
+  # Check network policies
+  kubectl get networkpolicies -A
+  ```
+  
+  **Resolution:**
+  
+  1. **Restart Cilium:**
+     ```bash
+     kubectl -n kube-system rollout restart deployment/cilium-operator
+     kubectl -n kube-system rollout restart daemonset/cilium
+     ```
+  
+  2. **Check IP forwarding:**
+     ```bash
+     sysctl net.ipv4.ip_forward
+     # Should be 1
+     ```
+  
+  3. **Verify CoreDNS:**
+     ```bash
+     kubectl -n kube-system get pods -l k8s-app=kube-dns
+     kubectl -n kube-system logs -l k8s-app=kube-dns
+     ```
+</Accordion>
+
+<Accordion title="Sealed Secrets Decryption Failed">
+  **Symptoms:**
+  - SealedSecret exists but Secret not created
+  - Error: "no key could decrypt secret"
+  
+  **Diagnosis:**
+  ```bash
+  kubectl get sealedsecrets -A
+  kubectl -n sealed-secrets logs -l app.kubernetes.io/name=sealed-secrets
+  ```
+  
+  **Common Causes:**
+  
+  1. **Sealed secret encrypted with wrong key**
+     Re-encrypt with current cluster key:
+     ```bash
+     kubeseal --fetch-cert > pub-cert.pem
+     kubectl create secret generic mysecret --dry-run=client -o yaml | \
+       kubeseal --cert=pub-cert.pem -o yaml > sealed-secret.yaml
+     ```
+  
+  2. **Sealed secrets controller not ready**
+     ```bash
+     kubectl -n sealed-secrets get pods
+     flux reconcile helmrelease sealed-secrets -n sealed-secrets
+     ```
+  
+  **Resolution:**
+  See [Backup and Restore](/operations/backup-restore) for recovering the private key.
+</Accordion>
+
+## Resource Debugging
+
+### Pod Failing to Start
+
+```bash
+# Check pod status
+kubectl get pod <pod-name> -n <namespace>
+
+# Describe pod for events
+kubectl describe pod <pod-name> -n <namespace>
+
+# Check logs
+kubectl logs <pod-name> -n <namespace>
+kubectl logs <pod-name> -n <namespace> --previous  # Previous container
+
+# Check resource constraints
+kubectl top pod <pod-name> -n <namespace>
+```
+
+### Service Not Accessible
+
+```bash
+# Check service
+kubectl get svc <service-name> -n <namespace>
+
+# Check endpoints
+kubectl get endpoints <service-name> -n <namespace>
+
+# Test from within cluster
+kubectl run test --image=curlimages/curl --rm -it -- \
+  curl -v http://<service-name>.<namespace>.svc.cluster.local
+```
+
+### Ingress Not Working
+
+```bash
+# Check ingress
+kubectl get ingress -A
+kubectl describe ingress <ingress-name> -n <namespace>
+
+# Check gateway
+kubectl get gateway -A
+kubectl describe gateway <gateway-name> -n <namespace>
+
+# Check if service is accessible
+kubectl port-forward svc/<service-name> 8080:80 -n <namespace>
+curl http://localhost:8080
+```
+
+## Performance Issues
+
+### High Memory Usage
+
+```bash
+# Check resource usage
+kubectl top nodes
+kubectl top pods -A --sort-by=memory
+
+# Identify memory leaks
+kubectl describe node <node-name> | grep -A 10 "Allocated resources"
+```
+
+### Slow Reconciliation
+
+```bash
+# Check Flux controller resources
+kubectl -n flux-system top pods
+
+# Increase controller resources in gotk-components.yaml
+# Adjust interval in Kustomizations:
+spec:
+  interval: 5m  # Increase from 1m if too frequent
+```
+
+## Emergency Procedures
+
+### Rollback a Change
+
+```bash
+# Find the bad commit
+git log --oneline
+
+# Revert the commit
+git revert <commit-hash>
+git push origin main
+
+# Or reset to previous commit (dangerous)
+git reset --hard <good-commit-hash>
+git push --force origin main
+
+# Force immediate reconciliation
+flux reconcile kustomization flux-system --with-source
+```
+
+### Bypass Flux Temporarily
+
+```bash
+# Suspend Flux reconciliation
+flux suspend kustomization flux-system
+
+# Make manual changes
+kubectl apply -f emergency-fix.yaml
+
+# Resume when ready
+flux resume kustomization flux-system
+```
+
+<Warning>
+  Manual changes will be reverted by Flux once resumed. Always update Git to make changes permanent.
+</Warning>
+
+## Getting Help
+
+- Check [Flux documentation](https://fluxcd.io/flux/)
+- View Flux GitHub issues
+- Enable debug logging:
+  ```bash
+  flux logs --all-namespaces --level=debug
+  ```
+
+## Next Steps
+
+- Learn about [Managing Resources](/operations/managing-resources)
+- Understand [Upgrade procedures](/operations/upgrades)
+- Set up [Backup and restore](/operations/backup-restore)

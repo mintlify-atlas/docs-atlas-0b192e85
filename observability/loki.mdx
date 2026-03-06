@@ -1,0 +1,557 @@
+---
+title: Loki
+description: Log aggregation system with 31-day retention and S3-compatible storage
+---
+
+Loki provides scalable log aggregation for the Kimbernetes cluster, storing logs collected by Grafana Alloy. It's deployed in SingleBinary mode with MinIO for S3-compatible object storage, optimized for Kubernetes environments.
+
+## HelmRelease Configuration
+
+```yaml overlays/base/grafana/grafana-loki/helm-release.yaml
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: grafana-loki
+spec:
+  timeout: 15m
+  chart:
+    spec:
+      chart: loki
+      sourceRef:
+        kind: HelmRepository
+        name: grafana
+      version: 6.49.0
+  interval: 24h
+  releaseName: loki-monolith
+```
+
+<Note>
+  The release is named `loki-monolith` to distinguish it from distributed deployments.
+</Note>
+
+## Deployment Architecture
+
+Loki runs in SingleBinary mode with all components in a single process:
+
+```yaml overlays/base/grafana/grafana-loki/helm-release.yaml
+deploymentMode: SingleBinary
+
+singleBinary:
+  replicas: 1
+  persistence:
+    storageClass: local-storage
+  extraArgs:
+    - -store.retention=31d
+```
+
+### Why SingleBinary Mode?
+
+<CardGroup cols={2}>
+  <Card title="Simplicity" icon="circle-check">
+    Single deployment to manage, easier troubleshooting
+  </Card>
+  
+  <Card title="Resource Efficiency" icon="gauge-high">
+    Lower overhead compared to microservices mode
+  </Card>
+  
+  <Card title="Sufficient for Most Workloads" icon="server">
+    Handles moderate log volumes effectively
+  </Card>
+  
+  <Card title="Easy Upgrades" icon="arrows-rotate">
+    No complex migration between versions
+  </Card>
+</CardGroup>
+
+<Warning>
+  For high-scale deployments (>100GB/day), consider switching to microservices mode with distributed components.
+</Warning>
+
+## Storage Configuration
+
+Loki uses a hybrid storage approach:
+
+### Index and Cache Storage
+
+```yaml
+loki:
+  schemaConfig:
+    configs:
+      - from: "2024-04-01"
+        store: tsdb
+        object_store: s3
+        schema: v13
+        index:
+          prefix: loki_index_
+          period: 24h
+```
+
+<Note>
+  TSDB (Time Series Database) index format provides better query performance and compression compared to legacy BoltDB.
+</Note>
+
+### Object Storage (MinIO)
+
+```yaml overlays/base/grafana/grafana-loki/helm-release.yaml
+minio:
+  enabled: true
+  persistence:
+    size: 30Gi
+    storageClass: local-storage
+```
+
+MinIO provides S3-compatible storage for log chunks:
+- **Capacity**: 30Gi
+- **Storage Class**: local-storage
+- **Access**: Internal cluster service
+
+<Accordion title="MinIO Service Endpoints">
+  MinIO exposes two services:
+  
+  ```bash
+  # S3 API endpoint (used by Loki)
+  loki-monolith-minio.observability.svc:9000
+  
+  # Web UI (for administration)
+  loki-monolith-minio-console.observability.svc:9001
+  ```
+  
+  Access the MinIO console:
+  
+  ```bash
+  kubectl port-forward -n observability svc/loki-monolith-minio-console 9001:9001
+  ```
+</Accordion>
+
+### Persistent Volume
+
+A PV is configured for WAL and temporary data:
+
+```yaml overlays/kimawesome/infrastructure/observability/grafana-loki/loki-pv.yaml
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: loki-pv
+spec:
+  capacity:
+    storage: 50Gi
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-storage
+  hostPath:
+    path: /mnt/loki-data
+```
+
+## Configuration
+
+### Authentication
+
+```yaml
+loki:
+  auth_enabled: false
+```
+
+<Warning>
+  Authentication is disabled for internal cluster use. Enable `auth_enabled: true` and configure tenants for multi-tenant deployments.
+</Warning>
+
+### Replication
+
+```yaml
+loki:
+  commonConfig:
+    replication_factor: 1
+```
+
+Single replica configuration suitable for development and small-scale production.
+
+### Limits and Features
+
+```yaml overlays/base/grafana/grafana-loki/helm-release.yaml
+loki:
+  pattern_ingester:
+    enabled: true
+  limits_config:
+    allow_structured_metadata: true
+    volume_enabled: true
+  ruler:
+    enable_api: true
+```
+
+<Tabs>
+  <Tab title="Pattern Ingester">
+    Automatically extracts log patterns for faster queries:
+    
+    ```logql
+    # Query detected patterns
+    {namespace="default"} | pattern
+    ```
+    
+    Patterns help identify common log structures without indexing every field.
+  </Tab>
+  
+  <Tab title="Structured Metadata">
+    Allows attaching metadata that doesn't affect log stream cardinality:
+    
+    ```logql
+    # Filter by structured metadata
+    {namespace="default"} | trace_id="abc123"
+    ```
+  </Tab>
+  
+  <Tab title="Volume Queries">
+    Enables volume range queries for analyzing log throughput:
+    
+    ```logql
+    # Get log volume by app
+    sum by (app) (bytes_over_time({namespace="default"}[1h]))
+    ```
+  </Tab>
+  
+  <Tab title="Ruler API">
+    Enables LogQL-based alerting rules:
+    
+    ```yaml
+    apiVersion: loki.grafana.com/v1
+    kind: LoggingRule
+    metadata:
+      name: high-error-rate
+    spec:
+      rules:
+      - alert: HighErrorRate
+        expr: |
+          sum(rate({namespace="default"} |= "error"[5m])) > 10
+    ```
+  </Tab>
+</Tabs>
+
+## Retention Policy
+
+Logs are retained for 31 days:
+
+```yaml
+singleBinary:
+  extraArgs:
+    - -store.retention=31d
+```
+
+<Note>
+  Retention is applied to the entire Loki instance. For per-tenant retention, configure `limits_config.retention_period` with authentication enabled.
+</Note>
+
+## LogQL Query Examples
+
+<CodeGroup>
+  ```logql Filter by Namespace
+  {namespace="default"}
+  ```
+  
+  ```logql Application Logs
+  {app="my-app", namespace="default"}
+  ```
+  
+  ```logql Error Logs
+  {namespace="default"} |= "error" or "ERROR" or "Error"
+  ```
+  
+  ```logql JSON Parsing
+  {namespace="default"}
+    | json
+    | status_code >= 400
+  ```
+  
+  ```logql Rate of Errors
+  sum(rate({namespace="default"} |= "error" [5m])) by (app)
+  ```
+  
+  ```logql Top 10 Log Volumes
+  topk(10, sum by (namespace) (bytes_over_time({job="alloy"}[1h])))
+  ```
+</CodeGroup>
+
+### Advanced LogQL
+
+<Tabs>
+  <Tab title="Pattern Matching">
+    ```logql
+    {namespace="default"}
+      | pattern `<ip> - - <_> "<method> <path> <_>" <status> <_>`
+      | status >= 400
+    ```
+    
+    Extract structured data from unstructured logs.
+  </Tab>
+  
+  <Tab title="Metric Queries">
+    ```logql
+    # Request rate by status code
+    sum by (status_code) (
+      rate(
+        {namespace="default"}
+        | json
+        | __error__="" [5m]
+      )
+    )
+    ```
+    
+    Convert logs to metrics for alerting.
+  </Tab>
+  
+  <Tab title="Line Format">
+    ```logql
+    {namespace="default"}
+      | json
+      | line_format "{{.level}} [{{.app}}] {{.message}}"
+    ```
+    
+    Reformat log lines for readability.
+  </Tab>
+  
+  <Tab title="Label Format">
+    ```logql
+    {namespace="default"}
+      | json
+      | label_format env="{{.environment}}"
+    ```
+    
+    Create new labels from log content.
+  </Tab>
+</Tabs>
+
+## Accessing Loki
+
+<Steps>
+  <Step title="Via Grafana Datasource">
+    Loki is pre-configured as a Grafana datasource. Access through:
+    
+    - Grafana → Explore → Select "Loki" datasource
+  </Step>
+  
+  <Step title="Direct API Access">
+    Port forward to Loki service:
+    
+    ```bash
+    kubectl port-forward -n observability svc/loki-monolith 3100:3100
+    ```
+    
+    Query API:
+    
+    ```bash
+    # Query logs
+    curl -G -s "http://localhost:3100/loki/api/v1/query_range" \
+      --data-urlencode 'query={namespace="default"}' \
+      --data-urlencode 'start=1h' | jq
+    
+    # Get labels
+    curl -s http://localhost:3100/loki/api/v1/labels | jq
+    ```
+  </Step>
+  
+  <Step title="LogCLI Tool">
+    Use Grafana's LogCLI for command-line queries:
+    
+    ```bash
+    # Install LogCLI
+    go install github.com/grafana/loki/cmd/logcli@latest
+    
+    # Forward port and query
+    export LOKI_ADDR=http://localhost:3100
+    logcli query '{namespace="default"}'
+    ```
+  </Step>
+</Steps>
+
+## Performance Optimization
+
+### Query Performance
+
+<Accordion title="Use specific label filters">
+  ```logql
+  # Good: Specific label selector
+  {namespace="default", app="my-app"}
+  
+  # Bad: Broad selector
+  {namespace=~".*"}
+  ```
+  
+  More specific label filters reduce the number of log streams Loki must search.
+</Accordion>
+
+<Accordion title="Limit time ranges">
+  ```logql
+  # Good: Recent time range
+  {namespace="default"}[1h]
+  
+  # Bad: Large time range
+  {namespace="default"}[30d]
+  ```
+  
+  Shorter time ranges query fewer chunks and return faster.
+</Accordion>
+
+<Accordion title="Use line filters early">
+  ```logql
+  # Good: Filter early in pipeline
+  {namespace="default"} |= "error" | json
+  
+  # Bad: Parse before filtering
+  {namespace="default"} | json | status >= 400
+  ```
+  
+  Line filters (`|=`, `!=`, `|~`, `!~`) are faster than parsers.
+</Accordion>
+
+### Resource Allocation
+
+For high log volumes, increase resources:
+
+```yaml
+singleBinary:
+  resources:
+    limits:
+      memory: 4Gi
+      cpu: 2000m
+    requests:
+      memory: 2Gi
+      cpu: 1000m
+```
+
+### Cache Configuration
+
+The deployment includes built-in caching:
+
+```yaml overlays/base/grafana/grafana-loki/helm-release.yaml
+chunksCache:
+  resources:
+    limits:
+      memory: "1Gi"
+    requests:
+      memory: "512Mi"
+resultsCache:
+  resources:
+    limits:
+      memory: "256Mi"
+    requests:
+      memory: "128Mi"
+```
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Loki pod not starting">
+    Check pod status:
+    
+    ```bash
+    kubectl get pod -n observability -l app.kubernetes.io/name=loki
+    kubectl describe pod -n observability -l app.kubernetes.io/name=loki
+    ```
+    
+    View logs:
+    
+    ```bash
+    kubectl logs -n observability -l app.kubernetes.io/name=loki
+    ```
+    
+    Common issues:
+    - PVC not bound (check storage class)
+    - MinIO not ready (check MinIO pods)
+    - Resource limits too low
+  </Accordion>
+  
+  <Accordion title="No logs appearing">
+    Verify Alloy is sending logs:
+    
+    ```bash
+    # Check Alloy write metrics
+    kubectl port-forward -n observability ds/grafana-monitoring-alloy-logs 12345:12345
+    curl http://localhost:12345/metrics | grep loki_write_sent_bytes_total
+    ```
+    
+    Check Loki ingestion:
+    
+    ```bash
+    kubectl port-forward -n observability svc/loki-monolith 3100:3100
+    curl http://localhost:3100/metrics | grep loki_ingester_streams
+    ```
+  </Accordion>
+  
+  <Accordion title="Queries timing out">
+    Check query performance:
+    
+    ```bash
+    kubectl port-forward -n observability svc/loki-monolith 3100:3100
+    curl http://localhost:3100/metrics | grep loki_query_duration_seconds
+    ```
+    
+    Optimize queries:
+    - Use more specific label selectors
+    - Reduce time ranges
+    - Add line filters before parsers
+  </Accordion>
+  
+  <Accordion title="Storage running out">
+    Check MinIO storage usage:
+    
+    ```bash
+    kubectl exec -n observability -it deploy/loki-monolith-minio -- df -h /export
+    ```
+    
+    Options:
+    - Reduce retention period
+    - Increase MinIO PVC size
+    - Migrate to external S3
+  </Accordion>
+</AccordionGroup>
+
+## Migrating to Distributed Mode
+
+For production at scale, consider distributed deployment:
+
+<Steps>
+  <Step title="Plan the Migration">
+    - Export existing logs or accept data loss
+    - Plan for separate read/write/backend components
+    - Configure object storage (S3, GCS, etc.)
+  </Step>
+  
+  <Step title="Update HelmRelease">
+    ```yaml
+    deploymentMode: Distributed
+    read:
+      replicas: 3
+    write:
+      replicas: 3
+    backend:
+      replicas: 3
+    ```
+  </Step>
+  
+  <Step title="Update Datasource">
+    Point to the new gateway service:
+    
+    ```yaml
+    url: http://loki-gateway.observability.svc:80
+    ```
+  </Step>
+</Steps>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Visualize in Grafana" href="./grafana-stack">
+    Create dashboards for log analytics
+  </Card>
+  
+  <Card title="Configure Alloy" href="./alloy">
+    Customize log collection pipelines
+  </Card>
+  
+  <Card title="Add Metrics" href="./prometheus">
+    Correlate logs with metrics
+  </Card>
+  
+  <Card title="Overview" href="./overview">
+    Return to observability architecture
+  </Card>
+</CardGroup>

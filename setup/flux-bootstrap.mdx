@@ -1,0 +1,229 @@
+---
+title: Flux Bootstrap
+description: Bootstrap FluxCD for GitOps continuous deployment
+---
+
+FluxCD enables GitOps continuous deployment by synchronizing your cluster state with a Git repository. This guide covers bootstrapping Flux with GitHub authentication.
+
+## Prerequisites
+
+Before bootstrapping Flux, ensure you have:
+
+- A GitHub account with access to your repository
+- A GitHub personal access token or SSH key
+- The Flux CLI installed
+- A Kubernetes cluster with network access to GitHub
+
+## Install Flux CLI
+
+<Steps>
+  <Step title="Download Flux CLI">
+    Install the Flux CLI on your control plane node:
+
+    ```bash
+    curl -s https://fluxcd.io/install.sh | sudo bash
+    ```
+  </Step>
+
+  <Step title="Verify installation">
+    ```bash
+    flux --version
+    ```
+  </Step>
+
+  <Step title="Check cluster compatibility">
+    ```bash
+    flux check --pre
+    ```
+
+    <Note>
+    This command verifies that your cluster meets Flux requirements.
+    </Note>
+  </Step>
+</Steps>
+
+## Create GitHub Personal Access Token
+
+<Steps>
+  <Step title="Generate token">
+    1. Go to GitHub Settings > Developer settings > Personal access tokens > Tokens (classic)
+    2. Click "Generate new token (classic)"
+    3. Select the following scopes:
+       - `repo` (all)
+       - `admin:repo_hook` (if using webhooks)
+    4. Generate and copy the token
+  </Step>
+
+  <Step title="Export token">
+    ```bash
+    export GITHUB_TOKEN="<your-token>"
+    ```
+
+    <Warning>
+    Keep your GitHub token secure. Never commit it to version control.
+    </Warning>
+  </Step>
+</Steps>
+
+## Bootstrap Flux
+
+<Warning>
+The bootstrap command will create the flux-system namespace and install Flux components. It will also create or update the GitHub repository with Flux manifests.
+</Warning>
+
+<Steps>
+  <Step title="Run flux bootstrap">
+    Bootstrap Flux with the following configuration:
+
+    ```bash
+    export GITHUB_TOKEN="<your-token>" && flux bootstrap github \
+      --owner=<github-username-or-org> \
+      --repository=<repository-name> \
+      --private=false \
+      --personal=true \
+      --path=./cluster/kimawesome \
+      --token-auth=false \
+      --read-write-key=true \
+      --components-extra='image-reflector-controller,image-automation-controller' \
+      -v v2.6.4
+    ```
+
+    **Parameter Explanation:**
+    - `--owner`: Your GitHub username or organization name
+    - `--repository`: Repository name (e.g., `kimbernetes-k8s-flux`)
+    - `--private=false`: Repository visibility (set to `true` for private repos)
+    - `--personal=true`: Use personal account (set to `false` for organizations)
+    - `--path=./cluster/kimawesome`: Path in repo where cluster manifests are stored
+    - `--token-auth=false`: Use SSH key instead of token for Git operations
+    - `--read-write-key=true`: Generate read-write SSH deploy key
+    - `--components-extra`: Additional Flux components for image automation
+    - `-v v2.6.4`: Flux version to install
+  </Step>
+
+  <Step title="Verify bootstrap">
+    Wait for Flux to install and reconcile:
+
+    ```bash
+    flux check
+    ```
+
+    Check that all Flux pods are running:
+
+    ```bash
+    kubectl get pods -n flux-system
+    ```
+  </Step>
+
+  <Step title="Verify GitRepository sync">
+    Check that Flux is syncing with your GitHub repository:
+
+    ```bash
+    flux get sources git
+    ```
+
+    The output should show the `flux-system` GitRepository with a "Fetched revision" status.
+  </Step>
+</Steps>
+
+## Flux System Configuration
+
+After bootstrapping, Flux creates the following configuration:
+
+### GitRepository
+
+The GitRepository resource defines the source repository:
+
+```yaml cluster/kimawesome/flux-system/gotk-sync.yaml
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: GitRepository
+metadata:
+  name: flux-system
+  namespace: flux-system
+spec:
+  interval: 1m0s
+  ref:
+    branch: main
+  secretRef:
+    name: flux-system
+  url: ssh://git@github.com/kim-ae/kimbernetes-k8s-flux
+```
+
+### Kustomization
+
+The Kustomization resource applies manifests from the repository:
+
+```yaml cluster/kimawesome/flux-system/gotk-sync.yaml
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: flux-system
+  namespace: flux-system
+spec:
+  interval: 10m0s
+  path: ./cluster/kimawesome
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: flux-system
+```
+
+<Note>
+- `interval: 1m0s`: GitRepository checks for updates every minute
+- `interval: 10m0s`: Kustomization reconciles every 10 minutes
+- `prune: true`: Removes resources deleted from Git
+</Note>
+
+## Verify Flux Operations
+
+<Steps>
+  <Step title="Check reconciliation status">
+    ```bash
+    flux get kustomizations
+    ```
+
+    All kustomizations should show "Applied revision" status.
+  </Step>
+
+  <Step title="View Flux events">
+    ```bash
+    flux events --for Kustomization/flux-system
+    ```
+  </Step>
+
+  <Step title="Monitor continuous reconciliation">
+    ```bash
+    flux logs --follow
+    ```
+  </Step>
+</Steps>
+
+## Troubleshooting
+
+### SSH Key Issues
+
+If Flux cannot authenticate with GitHub:
+
+```bash
+# Check the deploy key was added to GitHub
+flux get sources git flux-system
+
+# Recreate the secret if needed
+flux create secret git flux-system \
+  --url=ssh://git@github.com/<owner>/<repository>
+```
+
+### Reconciliation Failures
+
+If kustomizations fail to apply:
+
+```bash
+# Get detailed error messages
+flux get kustomizations --status-selector ready=false
+
+# Force reconciliation
+flux reconcile kustomization flux-system --with-source
+```
+
+## Next Steps
+
+With Flux bootstrapped and syncing your repository, proceed to [Initial Configuration](/setup/initial-configuration) to install core cluster components.

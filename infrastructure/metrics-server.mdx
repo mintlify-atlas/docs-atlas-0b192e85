@@ -1,0 +1,427 @@
+---
+title: 'Metrics Server'
+description: 'Enable resource metrics collection for Horizontal Pod Autoscaling and kubectl top commands'
+---
+
+## Overview
+
+Metrics Server collects resource metrics from Kubelets and exposes them through the Kubernetes API server. It enables:
+
+- `kubectl top nodes` and `kubectl top pods` commands
+- Horizontal Pod Autoscaler (HPA)
+- Vertical Pod Autoscaler (VPA)
+- Resource-based scheduling decisions
+
+## HelmRelease Configuration
+
+Metrics Server is deployed using Flux with the following HelmRelease:
+
+```yaml helm-release.yaml
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: metrics-server
+spec:
+  chart:
+    spec:
+      chart: metrics-server
+      sourceRef:
+        kind: HelmRepository
+        name: metrics-server
+      version: 3.13.0
+  interval: 1m0s
+  releaseName: metrics-server
+  install:
+    crds: Create
+  upgrade:
+    crds: CreateReplace
+  values:
+    args:
+      - --kubelet-insecure-tls
+```
+
+### Configuration Parameters
+
+<ParamField path="spec.chart.spec.version" type="string" required>
+  Metrics Server Helm chart version. Currently using `3.13.0`
+</ParamField>
+
+<ParamField path="spec.values.args" type="array" required>
+  Command-line arguments for metrics-server
+</ParamField>
+
+<ParamField path="--kubelet-insecure-tls" type="flag" required>
+  Skip verification of Kubelet TLS certificates. Required for clusters without properly signed Kubelet certificates.
+</ParamField>
+
+<Warning>
+  The `--kubelet-insecure-tls` flag is required for most bare-metal and development clusters. It disables TLS verification between metrics-server and kubelets.
+</Warning>
+
+## Advanced Configuration
+
+For production clusters with control plane scheduling requirements, you can patch the HelmRelease:
+
+```yaml helm-release.patch.yaml
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: metrics-server
+spec:
+  values:
+    tolerations:
+      - key: "node-role.kubernetes.io/control-plane"
+        operator: "Exists"
+        effect: "NoSchedule"
+    nodeSelector:
+      kubernetes.io/hostname: controlplane-82md
+```
+
+### Scheduling Parameters
+
+<ParamField path="tolerations" type="array">
+  Tolerations allow metrics-server to run on tainted nodes (like control plane nodes)
+</ParamField>
+
+<ParamField path="nodeSelector" type="object">
+  Constraints for which nodes metrics-server can be scheduled on
+</ParamField>
+
+## Configuration Options
+
+<Tabs>
+  <Tab title="Insecure TLS (Development)">
+    For development and bare-metal clusters without proper TLS certificates:
+
+    ```yaml
+    values:
+      args:
+        - --kubelet-insecure-tls
+    ```
+
+    **Use case:** Development, testing, and bare-metal clusters
+  </Tab>
+
+  <Tab title="Secure TLS (Production)">
+    For production clusters with properly signed Kubelet certificates:
+
+    ```yaml
+    values:
+      args:
+        - --kubelet-preferred-address-types=InternalIP,ExternalIP,Hostname
+        - --kubelet-use-node-status-port
+        - --metric-resolution=15s
+    ```
+
+    **Use case:** Production clusters with proper PKI infrastructure
+  </Tab>
+
+  <Tab title="High Availability">
+    Run multiple replicas for high availability:
+
+    ```yaml
+    values:
+      replicas: 2
+      podDisruptionBudget:
+        enabled: true
+        minAvailable: 1
+      args:
+        - --kubelet-insecure-tls
+    ```
+
+    **Use case:** Production environments requiring high availability
+  </Tab>
+</Tabs>
+
+## Using Metrics Server
+
+### kubectl top commands
+
+Once metrics-server is running, you can view resource usage:
+
+<CodeGroup>
+```bash View node metrics
+kubectl top nodes
+```
+
+```bash View pod metrics
+kubectl top pods -A
+```
+
+```bash View pod metrics in specific namespace
+kubectl top pods -n production
+```
+
+```bash Sort by CPU usage
+kubectl top pods -A --sort-by=cpu
+```
+
+```bash Sort by memory usage
+kubectl top pods -A --sort-by=memory
+```
+</CodeGroup>
+
+#### Example Output
+
+```bash
+$ kubectl top nodes
+NAME                CPU(cores)   CPU%   MEMORY(bytes)   MEMORY%
+controlplane-82md   245m         6%     2048Mi          51%
+worker-01           512m         12%    4096Mi          25%
+worker-02           389m         9%     3072Mi          19%
+```
+
+```bash
+$ kubectl top pods -n kube-system
+NAME                                    CPU(cores)   MEMORY(bytes)
+cilium-operator-5f4d8c5b9-xxxxx         5m           45Mi
+cilium-xxxxx                            15m          128Mi
+metrics-server-7b4c8d9f5-xxxxx          3m           18Mi
+```
+
+### Horizontal Pod Autoscaler (HPA)
+
+Use metrics-server data to automatically scale deployments:
+
+```yaml hpa.yaml
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: my-app-hpa
+  namespace: production
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: my-app
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+```
+
+<Steps>
+  <Step title="Define resource requests">
+    Ensure your deployment has resource requests defined:
+
+    ```yaml
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+    ```
+  </Step>
+
+  <Step title="Create HPA">
+    ```bash
+    kubectl apply -f hpa.yaml
+    ```
+  </Step>
+
+  <Step title="Verify HPA status">
+    ```bash
+    kubectl get hpa my-app-hpa -n production
+    ```
+
+    Expected output:
+    ```
+    NAME         REFERENCE          TARGETS           MINPODS   MAXPODS   REPLICAS
+    my-app-hpa   Deployment/my-app  45%/70%, 60%/80%  2         10        3
+    ```
+  </Step>
+</Steps>
+
+### Quick HPA creation
+
+```bash
+kubectl autoscale deployment my-app \
+  --cpu-percent=70 \
+  --min=2 \
+  --max=10 \
+  -n production
+```
+
+## Verifying Metrics Server
+
+### Check metrics-server pod
+
+```bash
+kubectl get pods -n kube-system -l app.kubernetes.io/name=metrics-server
+```
+
+Expected output:
+```
+NAME                              READY   STATUS    RESTARTS   AGE
+metrics-server-7b4c8d9f5-xxxxx    1/1     Running   0          5d
+```
+
+### Check metrics API
+
+```bash
+kubectl get apiservices | grep metrics
+```
+
+Expected output:
+```
+v1beta1.metrics.k8s.io                 kube-system/metrics-server   True        5d
+```
+
+### Test metrics endpoint
+
+```bash
+kubectl get --raw /apis/metrics.k8s.io/v1beta1/nodes
+```
+
+Should return JSON with node metrics.
+
+### View metrics-server logs
+
+```bash
+kubectl logs -n kube-system -l app.kubernetes.io/name=metrics-server
+```
+
+## Troubleshooting
+
+### kubectl top commands not working
+
+<Steps>
+  <Step title="Verify metrics-server is running">
+    ```bash
+    kubectl get pods -n kube-system -l app.kubernetes.io/name=metrics-server
+    ```
+  </Step>
+
+  <Step title="Check metrics API registration">
+    ```bash
+    kubectl get apiservices v1beta1.metrics.k8s.io
+    ```
+
+    Should show `True` in the AVAILABLE column
+  </Step>
+
+  <Step title="Test metrics endpoint">
+    ```bash
+    kubectl get --raw /apis/metrics.k8s.io/v1beta1/nodes
+    ```
+
+    Should return node metrics JSON
+  </Step>
+
+  <Step title="Check logs for errors">
+    ```bash
+    kubectl logs -n kube-system -l app.kubernetes.io/name=metrics-server --tail=50
+    ```
+
+    Look for TLS or connection errors
+  </Step>
+</Steps>
+
+### TLS certificate errors
+
+If you see errors like:
+```
+Unable to authenticate the request due to an error: x509: certificate signed by unknown authority
+```
+
+Add the `--kubelet-insecure-tls` flag:
+
+```yaml
+values:
+  args:
+    - --kubelet-insecure-tls
+```
+
+### Connection refused errors
+
+If metrics-server cannot connect to kubelets:
+
+```yaml
+values:
+  args:
+    - --kubelet-insecure-tls
+    - --kubelet-preferred-address-types=InternalIP,ExternalIP,Hostname
+```
+
+### HPA not scaling
+
+1. Verify metrics are available:
+   ```bash
+   kubectl top pods -n production
+   ```
+
+2. Check HPA status:
+   ```bash
+   kubectl describe hpa my-app-hpa -n production
+   ```
+
+3. Ensure pods have resource requests defined:
+   ```bash
+   kubectl get deployment my-app -n production -o yaml | grep -A 5 resources
+   ```
+
+4. Check HPA events:
+   ```bash
+   kubectl get events -n production --field-selector involvedObject.name=my-app-hpa
+   ```
+
+## Metrics Resolution
+
+By default, metrics-server scrapes metrics every 60 seconds. To adjust:
+
+```yaml
+values:
+  args:
+    - --kubelet-insecure-tls
+    - --metric-resolution=15s
+```
+
+<Note>
+  Lower metric resolution increases CPU usage on both metrics-server and kubelets. The default 60s is suitable for most use cases.
+</Note>
+
+## Resource Requests and Limits
+
+For production deployments, configure appropriate resources:
+
+```yaml
+values:
+  resources:
+    requests:
+      cpu: 100m
+      memory: 200Mi
+    limits:
+      cpu: 200m
+      memory: 400Mi
+```
+
+## Best Practices
+
+<Tip>
+  - Use `--kubelet-insecure-tls` for development and bare-metal clusters
+  - Set up proper TLS certificates for production clusters when possible
+  - Monitor metrics-server resource usage as cluster grows
+  - Always define resource requests on pods that use HPA
+  - Use HPA for stateless applications that can scale horizontally
+  - Test HPA behavior under load before production deployment
+  - Run multiple replicas for high-availability production environments
+</Tip>
+
+## Resources
+
+- [Metrics Server GitHub](https://github.com/kubernetes-sigs/metrics-server)
+- [Horizontal Pod Autoscaler](https://kubernetes.io/docs/tasks/run-application/horizontal-pod-autoscale/)
+- [Resource Metrics Pipeline](https://kubernetes.io/docs/tasks/debug/debug-cluster/resource-metrics-pipeline/)

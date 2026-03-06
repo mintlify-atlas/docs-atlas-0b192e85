@@ -1,0 +1,372 @@
+---
+title: Managing Resources
+description: Learn how to manage Kubernetes resources using Flux GitOps workflows
+---
+
+## Overview
+
+Kimbernetes uses Flux v2.7.5 to manage all cluster resources through GitOps. All changes are made via Git commits, which Flux automatically reconciles to the cluster.
+
+## Resource Structure
+
+The repository is organized into:
+
+- `cluster/kimawesome/` - Flux system configuration and cluster-level Kustomizations
+- `overlays/base/` - Base application definitions (HelmReleases, Deployments, Services)
+- `overlays/kimawesome/` - Environment-specific customizations
+
+## GitOps Workflow
+
+<Steps>
+  <Step title="Make changes in Git">
+    Edit YAML files in your local clone of the repository:
+    
+    ```bash
+    git clone ssh://git@github.com/kim-ae/kimbernetes-k8s-flux
+    cd kimbernetes-k8s-flux
+    ```
+  </Step>
+  
+  <Step title="Commit and push changes">
+    ```bash
+    git add .
+    git commit -m "Add new application"
+    git push origin main
+    ```
+  </Step>
+  
+  <Step title="Flux reconciles automatically">
+    Flux polls the Git repository every minute and applies changes automatically. You can force immediate reconciliation:
+    
+    ```bash
+    flux reconcile source git flux-system
+    flux reconcile kustomization flux-system
+    ```
+  </Step>
+</Steps>
+
+## Flux CLI Commands
+
+### View Resource Status
+
+```bash
+# View all Flux resources
+flux get all
+
+# View Kustomizations
+flux get kustomizations
+
+# View HelmReleases
+flux get helmreleases -A
+
+# View GitRepositories
+flux get sources git
+```
+
+### View Logs
+
+```bash
+# View Flux controller logs
+flux logs --level=error --all-namespaces
+
+# View specific controller logs
+flux logs --kind=Kustomization --name=flux-system
+flux logs --kind=HelmRelease --name=cert-manager -n flux-system
+```
+
+### Force Reconciliation
+
+```bash
+# Reconcile a Kustomization
+flux reconcile kustomization overlays --with-source
+
+# Reconcile a HelmRelease
+flux reconcile helmrelease cert-manager -n flux-system
+
+# Reconcile Git source
+flux reconcile source git flux-system
+```
+
+## Adding a New HelmRelease
+
+<Steps>
+  <Step title="Create the HelmRepository">
+    Create `overlays/base/myapp/helm-repository.yaml`:
+    
+    ```yaml
+    apiVersion: source.toolkit.fluxcd.io/v1
+    kind: HelmRepository
+    metadata:
+      name: myapp
+      namespace: myapp
+    spec:
+      interval: 24h
+      url: https://charts.example.com
+    ```
+  </Step>
+  
+  <Step title="Create the HelmRelease">
+    Create `overlays/base/myapp/helm-release.yaml`:
+    
+    ```yaml
+    apiVersion: helm.toolkit.fluxcd.io/v2
+    kind: HelmRelease
+    metadata:
+      name: myapp
+      namespace: flux-system
+    spec:
+      chart:
+        spec:
+          chart: myapp
+          sourceRef:
+            kind: HelmRepository
+            name: myapp
+            namespace: myapp
+          version: "=1.2.3"
+      interval: 24h
+      releaseName: myapp
+      targetNamespace: myapp
+      install:
+        crds: Create
+      upgrade:
+        crds: CreateReplace
+      values:
+        replicas: 2
+        resources:
+          limits:
+            memory: 512Mi
+    ```
+  </Step>
+  
+  <Step title="Create the Kustomization">
+    Create `overlays/base/myapp/kustomization.yaml`:
+    
+    ```yaml
+    resources:
+    - namespace.yaml
+    - helm-repository.yaml
+    - helm-release.yaml
+    ```
+  </Step>
+  
+  <Step title="Reference in parent Kustomization">
+    Add to `overlays/kimawesome/kustomization.yaml`:
+    
+    ```yaml
+    resources:
+    - ../base/myapp
+    ```
+  </Step>
+  
+  <Step title="Commit and push">
+    ```bash
+    git add overlays/
+    git commit -m "Add myapp HelmRelease"
+    git push origin main
+    ```
+  </Step>
+</Steps>
+
+<Note>
+  Pin versions using `version: "=1.2.3"` syntax to prevent automatic upgrades. See examples in `overlays/base/sealed-secrets/helm-release.yaml` and `overlays/base/metallb/helm-release.yaml`.
+</Note>
+
+## Adding Custom Kubernetes Resources
+
+<Steps>
+  <Step title="Create resource YAML">
+    Create `overlays/base/myapp/deployment.yaml`:
+    
+    ```yaml
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: myapp
+      namespace: myapp
+    spec:
+      replicas: 2
+      selector:
+        matchLabels:
+          app: myapp
+      template:
+        metadata:
+          labels:
+            app: myapp
+        spec:
+          containers:
+          - name: myapp
+            image: myapp:latest
+            ports:
+            - containerPort: 8080
+    ```
+  </Step>
+  
+  <Step title="Add to Kustomization">
+    Create or update `overlays/base/myapp/kustomization.yaml`:
+    
+    ```yaml
+    resources:
+    - deployment.yaml
+    - service.yaml
+    ```
+  </Step>
+  
+  <Step title="Commit and push">
+    ```bash
+    git add overlays/base/myapp/
+    git commit -m "Add myapp deployment"
+    git push origin main
+    ```
+  </Step>
+</Steps>
+
+## Creating a Flux Kustomization
+
+Flux Kustomizations define what paths to reconcile from Git:
+
+```yaml
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: myapp
+  namespace: flux-system
+spec:
+  interval: 10m
+  path: "./overlays/myapp"
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: flux-system
+  healthChecks:
+  - apiVersion: apps/v1
+    kind: Deployment
+    name: myapp
+    namespace: myapp
+```
+
+<Warning>
+  Setting `prune: true` means Flux will delete resources removed from Git. Be careful when removing resources.
+</Warning>
+
+## Modifying Existing Resources
+
+<Steps>
+  <Step title="Locate the resource">
+    Find the YAML file in `overlays/base/` or `overlays/kimawesome/`:
+    
+    ```bash
+    find overlays/ -name "helm-release.yaml" -path "*/cert-manager/*"
+    ```
+  </Step>
+  
+  <Step title="Edit the file">
+    Modify the resource definition:
+    
+    ```yaml
+    # overlays/base/cert-manager/helm-release.yaml
+    spec:
+      values:
+        resources:
+          limits:
+            memory: 256Mi  # Changed from 128Mi
+    ```
+  </Step>
+  
+  <Step title="Commit and push">
+    ```bash
+    git add overlays/base/cert-manager/
+    git commit -m "Increase cert-manager memory limit"
+    git push origin main
+    ```
+  </Step>
+  
+  <Step title="Monitor reconciliation">
+    ```bash
+    flux reconcile helmrelease cert-manager -n flux-system
+    kubectl -n cert-manager get pods -w
+    ```
+  </Step>
+</Steps>
+
+## Removing Resources
+
+<Steps>
+  <Step title="Remove from Kustomization">
+    Delete or comment out the resource reference in `kustomization.yaml`:
+    
+    ```yaml
+    resources:
+    # - ../base/old-app  # Removed
+    - ../base/cert-manager
+    ```
+  </Step>
+  
+  <Step title="Delete resource files (optional)">
+    ```bash
+    rm -rf overlays/base/old-app/
+    ```
+  </Step>
+  
+  <Step title="Commit and push">
+    ```bash
+    git add overlays/
+    git commit -m "Remove old-app"
+    git push origin main
+    ```
+  </Step>
+  
+  <Step title="Verify deletion">
+    Flux will automatically delete the resources (if `prune: true`):
+    
+    ```bash
+    kubectl get all -n old-app
+    ```
+  </Step>
+</Steps>
+
+## Suspending and Resuming Resources
+
+```bash
+# Suspend a HelmRelease (prevents reconciliation)
+flux suspend helmrelease myapp -n flux-system
+
+# Resume a HelmRelease
+flux resume helmrelease myapp -n flux-system
+
+# Suspend a Kustomization
+flux suspend kustomization overlays
+
+# Resume a Kustomization
+flux resume kustomization overlays
+```
+
+<Note>
+  Suspending resources is useful during maintenance or troubleshooting to prevent Flux from reverting manual changes.
+</Note>
+
+## Checking Resource Health
+
+```bash
+# Check HelmRelease status
+kubectl -n flux-system get helmrelease cert-manager -o yaml | grep -A 10 status
+
+# Check Kustomization status
+kubectl -n flux-system get kustomization overlays -o yaml | grep -A 10 status
+
+# View events
+kubectl -n flux-system get events --sort-by='.lastTimestamp'
+```
+
+## Best Practices
+
+- **Always commit first**: Never apply resources directly with `kubectl apply`. Always commit to Git.
+- **Use version pinning**: Pin Helm chart versions with `version: "=1.2.3"` to prevent unexpected upgrades.
+- **Test in overlays**: Use environment-specific overlays (`overlays/minikube/`) for testing before production.
+- **Small commits**: Make small, focused commits for easier rollback.
+- **Monitor reconciliation**: Watch Flux logs during changes to catch issues early.
+
+## Next Steps
+
+- Learn about [Troubleshooting](/operations/troubleshooting) common issues
+- Understand [Upgrade procedures](/operations/upgrades)
+- Set up [Backup and restore](/operations/backup-restore)

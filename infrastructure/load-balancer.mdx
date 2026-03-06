@@ -1,0 +1,327 @@
+---
+title: 'Load Balancer with MetalLB'
+description: 'Configure MetalLB for bare-metal load balancing and expose services with LoadBalancer type'
+---
+
+## Overview
+
+MetalLB is a load balancer implementation for bare metal Kubernetes clusters. It provides LoadBalancer-type service support, which is typically only available in cloud environments.
+
+## HelmRelease Configuration
+
+MetalLB is deployed using Flux with the following HelmRelease:
+
+```yaml helm-release.yaml
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: metallb
+spec:
+  chart:
+    spec:
+      chart: metallb
+      sourceRef:
+        kind: HelmRepository
+        name: metallb
+      version: "=0.15.3"
+  interval: 24h
+  releaseName: metallb
+  install:
+    crds: Create
+  upgrade:
+    crds: CreateReplace
+```
+
+### Key Configuration
+
+<ParamField path="spec.chart.spec.version" type="string" required>
+  MetalLB Helm chart version. Currently using `0.15.3`
+</ParamField>
+
+<ParamField path="spec.interval" type="string" default="24h">
+  How often Flux checks for chart updates
+</ParamField>
+
+<ParamField path="spec.install.crds" type="string" default="Create">
+  CRD management strategy during installation
+</ParamField>
+
+## IP Address Pool Configuration
+
+MetalLB requires an IPAddressPool resource to define the range of IP addresses it can assign:
+
+```yaml ippool.yaml
+apiVersion: metallb.io/v1beta1
+kind: IPAddressPool
+metadata:
+  name: first-pool
+  namespace: metallb-system
+spec:
+  addresses:
+  - 192.168.10.0/24
+```
+
+### L2 Advertisement
+
+For Layer 2 mode, configure L2Advertisement to announce IP addresses:
+
+```yaml l2advertisement.yaml
+apiVersion: metallb.io/v1beta1
+kind: L2Advertisement
+metadata:
+  name: l2-advertisement
+  namespace: metallb-system
+spec:
+  ipAddressPools:
+    - first-pool
+```
+
+<Note>
+  L2 mode is simpler to configure but requires that MetalLB nodes are on the same Layer 2 network as your clients.
+</Note>
+
+## Operating Modes
+
+<Tabs>
+  <Tab title="Layer 2 Mode">
+    Layer 2 mode uses ARP (for IPv4) or NDP (for IPv6) to announce service IPs:
+
+    **Advantages:**
+    - Simple configuration
+    - No special network equipment required
+    - Works with standard switches
+
+    **Limitations:**
+    - All traffic goes through a single node
+    - Failover can take a few seconds
+
+    **Configuration:**
+    ```yaml
+    apiVersion: metallb.io/v1beta1
+    kind: L2Advertisement
+    metadata:
+      name: l2-advertisement
+    spec:
+      ipAddressPools:
+        - first-pool
+    ```
+  </Tab>
+
+  <Tab title="BGP Mode">
+    BGP mode peers with your network routers using the BGP protocol:
+
+    **Advantages:**
+    - True load balancing across multiple nodes
+    - Faster failover
+    - Better scalability
+
+    **Requirements:**
+    - BGP-capable router
+    - Network configuration for BGP peering
+
+    **Configuration:**
+    ```yaml
+    apiVersion: metallb.io/v1beta1
+    kind: BGPAdvertisement
+    metadata:
+      name: bgp-advertisement
+    spec:
+      ipAddressPools:
+        - first-pool
+      peers:
+        - 192.168.1.1
+    ```
+  </Tab>
+</Tabs>
+
+## Using LoadBalancer Services
+
+<Steps>
+  <Step title="Create a LoadBalancer service">
+    Define a service with type LoadBalancer:
+
+    ```yaml service.yaml
+    apiVersion: v1
+    kind: Service
+    metadata:
+      name: my-app
+      namespace: default
+    spec:
+      type: LoadBalancer
+      selector:
+        app: my-app
+      ports:
+        - port: 80
+          targetPort: 8080
+          protocol: TCP
+    ```
+  </Step>
+
+  <Step title="Apply the service">
+    ```bash
+    kubectl apply -f service.yaml
+    ```
+  </Step>
+
+  <Step title="Verify IP assignment">
+    Check that MetalLB assigned an external IP:
+
+    ```bash
+    kubectl get svc my-app
+    ```
+
+    Expected output:
+    ```
+    NAME     TYPE           CLUSTER-IP      EXTERNAL-IP     PORT(S)
+    my-app   LoadBalancer   10.96.100.50    192.168.10.10   80:30123/TCP
+    ```
+  </Step>
+
+  <Step title="Test connectivity">
+    Access the service using the external IP:
+
+    ```bash
+    curl http://192.168.10.10
+    ```
+  </Step>
+</Steps>
+
+## Advanced Configuration
+
+### Requesting Specific IP Addresses
+
+You can request a specific IP from the pool:
+
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: my-app
+spec:
+  type: LoadBalancer
+  loadBalancerIP: 192.168.10.50  # Request specific IP
+  selector:
+    app: my-app
+  ports:
+    - port: 80
+      targetPort: 8080
+```
+
+### IP Sharing
+
+Multiple services can share the same IP using the `metallb.universe.tf/allow-shared-ip` annotation:
+
+<CodeGroup>
+```yaml http-service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: http-service
+  annotations:
+    metallb.universe.tf/allow-shared-ip: "shared-ip-key"
+spec:
+  type: LoadBalancer
+  loadBalancerIP: 192.168.10.100
+  ports:
+    - port: 80
+      protocol: TCP
+```
+
+```yaml https-service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: https-service
+  annotations:
+    metallb.universe.tf/allow-shared-ip: "shared-ip-key"
+spec:
+  type: LoadBalancer
+  loadBalancerIP: 192.168.10.100
+  ports:
+    - port: 443
+      protocol: TCP
+```
+</CodeGroup>
+
+<Warning>
+  When sharing IPs, ensure services use different ports to avoid conflicts.
+</Warning>
+
+## Verifying MetalLB Status
+
+### Check MetalLB pods
+
+```bash
+kubectl get pods -n metallb-system
+```
+
+Expected output:
+```
+NAME                          READY   STATUS    RESTARTS   AGE
+controller-xxxxxxxxxx-xxxxx   1/1     Running   0          5d
+speaker-xxxxx                 1/1     Running   0          5d
+speaker-yyyyy                 1/1     Running   0          5d
+```
+
+### View IP address pools
+
+```bash
+kubectl get ipaddresspools -n metallb-system
+```
+
+### Check allocated IPs
+
+```bash
+kubectl get svc --all-namespaces -o wide | grep LoadBalancer
+```
+
+## Troubleshooting
+
+### Service stuck in pending
+
+If a LoadBalancer service remains in pending:
+
+1. Check if IPAddressPool is configured:
+   ```bash
+   kubectl get ipaddresspools -n metallb-system
+   ```
+
+2. Verify pool has available IPs:
+   ```bash
+   kubectl describe ipaddresspool first-pool -n metallb-system
+   ```
+
+3. Check MetalLB controller logs:
+   ```bash
+   kubectl logs -n metallb-system -l app.kubernetes.io/component=controller
+   ```
+
+### IP not reachable
+
+1. Verify L2Advertisement is configured:
+   ```bash
+   kubectl get l2advertisements -n metallb-system
+   ```
+
+2. Check speaker logs:
+   ```bash
+   kubectl logs -n metallb-system -l app.kubernetes.io/component=speaker
+   ```
+
+3. Verify network connectivity from speaker nodes
+
+## Best Practices
+
+<Tip>
+  - Define IP pools carefully to avoid conflicts with your network DHCP range
+  - Use L2 mode for simplicity in small to medium deployments
+  - Consider BGP mode for production environments requiring high availability
+  - Monitor IP address pool utilization to prevent exhaustion
+  - Document IP assignments for services in your infrastructure documentation
+</Tip>
+
+## Resources
+
+- [MetalLB Documentation](https://metallb.universe.tf/)
+- [MetalLB Configuration Guide](https://metallb.universe.tf/configuration/)
+- [Layer 2 vs BGP Mode](https://metallb.universe.tf/concepts/)

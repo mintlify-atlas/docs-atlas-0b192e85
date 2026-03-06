@@ -1,0 +1,472 @@
+---
+title: Tooling Applications
+description: Developer tools including n8n workflow automation and Yopass secret sharing
+---
+
+## Overview
+
+The `tooling` namespace hosts developer and operational tools that support the cluster and team workflows. These applications are managed by Flux and deployed in the `overlays/kimawesome/applications/tooling/` directory.
+
+## Available Tools
+
+<CardGroup cols={2}>
+  <Card title="n8n" icon="diagram-project">
+    Workflow automation platform for building integrations and automations
+  </Card>
+  
+  <Card title="Yopass" icon="key">
+    Secure secret sharing tool with time-limited access
+  </Card>
+</CardGroup>
+
+## n8n Workflow Automation
+
+### Overview
+
+n8n is a workflow automation tool that allows you to build integrations between different services and automate tasks. It's deployed using a Helm chart and exposed via an internal HTTPRoute.
+
+### Deployment
+
+The n8n application is deployed via HelmRelease at `overlays/base/n8n/helm-release.yaml:1`:
+
+```yaml
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: n8n
+spec:
+  releaseName: n8n
+  interval: 5m
+  chart:
+    spec:
+      chart: n8n
+      version: "=2.0.1"
+      sourceRef:
+        kind: HelmRepository
+        name: n8n
+  values: {}
+```
+
+<Note>
+The Helm chart version is pinned to `2.0.1` to ensure consistent deployments.
+</Note>
+
+### Configuration
+
+The kimawesome overlay applies additional configuration at `overlays/kimawesome/applications/tooling/n8n/helm-release.patch.yaml:1`:
+
+```yaml
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: n8n
+spec:
+  values:
+    main:
+      config:
+        N8N_SECURE_COOKIE: false
+```
+
+<Warning>
+`N8N_SECURE_COOKIE` is set to `false` because the application is accessed via HTTP internally. If exposing externally, enable HTTPS and set this to `true`.
+</Warning>
+
+### Accessing n8n
+
+The n8n web interface is accessible via the internal gateway at `overlays/kimawesome/applications/tooling/n8n/httproute.yaml:1`:
+
+```yaml
+apiVersion: gateway.networking.k8s.io/v1beta1
+kind: HTTPRoute
+metadata:
+  name: n8n
+spec:
+  parentRefs:
+    - name: internal-gateway
+      namespace: kube-system
+  hostnames:
+    - n8n.internal.kim.tec.br
+  rules:
+    - backendRefs:
+        - name: n8n
+          port: 80
+```
+
+<Steps>
+  <Step title="Access the Web UI">
+    Navigate to the n8n interface:
+    
+    ```
+    http://n8n.internal.kim.tec.br
+    ```
+    
+    Or use the DNS record:
+    
+    ```
+    http://192.168.10.2
+    ```
+  </Step>
+  
+  <Step title="Create Your First Workflow">
+    1. Click "Create new workflow"
+    2. Add trigger nodes (webhook, schedule, etc.)
+    3. Add action nodes (HTTP request, email, etc.)
+    4. Configure connections between nodes
+    5. Test and activate your workflow
+  </Step>
+  
+  <Step title="Set Up Credentials">
+    Add credentials for external services in Settings → Credentials. Credentials are encrypted and stored in n8n's database.
+  </Step>
+</Steps>
+
+### Common Use Cases
+
+<Tabs>
+  <Tab title="Webhook Automation">
+    Create a webhook trigger to receive events from external services:
+    
+    ```javascript
+    // Webhook URL format
+    http://n8n.internal.kim.tec.br/webhook/your-webhook-id
+    
+    // Example: Trigger on GitHub push
+    {
+      "event": "push",
+      "repository": "myrepo",
+      "branch": "main"
+    }
+    ```
+  </Tab>
+  
+  <Tab title="Scheduled Tasks">
+    Run workflows on a schedule:
+    
+    - Every hour: `0 * * * *`
+    - Daily at 9 AM: `0 9 * * *`
+    - Every Monday: `0 0 * * 1`
+  </Tab>
+  
+  <Tab title="Integration Examples">
+    - Monitor Git repositories and notify on changes
+    - Sync data between databases
+    - Process files from cloud storage
+    - Send notifications to Slack/Discord
+    - Automate deployment workflows
+  </Tab>
+</Tabs>
+
+## Yopass Secret Sharing
+
+### Overview
+
+Yopass is a secure way to share secrets with time-limited access. Secrets are encrypted in the browser and stored temporarily in memcached.
+
+### Deployment
+
+The Yopass deployment is defined at `overlays/base/yopass/deployment.yaml:1`:
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: yopass
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: yopass
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: yopass
+    spec:
+      containers:
+        - name: yopass
+          image: jhaals/yopass
+          args:
+            - "--memcached=localhost:11211"
+          ports:
+            - name: http
+              containerPort: 1337
+          resources:
+            limits:
+              cpu: 100m
+              memory: 50Mi
+            requests:
+              cpu: 100m
+              memory: 50Mi
+        - name: yopass-memcached
+          image: memcached
+          resources:
+            limits:
+              cpu: 100m
+              memory: 100Mi
+            requests:
+              cpu: 100m
+              memory: 100Mi
+          args:
+            - "-m 64"
+          ports:
+            - name: memcached
+              containerPort: 11211
+```
+
+<Note>
+Yopass uses a sidecar memcached container for temporary secret storage. Secrets are automatically deleted after expiration.
+</Note>
+
+### Service Configuration
+
+The Yopass service is defined at `overlays/base/yopass/service.yaml:1`:
+
+```yaml
+kind: Service
+apiVersion: v1
+metadata:
+  name: yopass
+spec:
+  selector:
+    app.kubernetes.io/name: yopass
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 1337
+```
+
+### Accessing Yopass
+
+Yopass is exposed via HTTPRoute at `overlays/kimawesome/applications/tooling/yopass/httproute.yaml:1`:
+
+```yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: yopass-route
+spec:
+  parentRefs:
+    - name: https-gateway
+      namespace: kube-system
+      sectionName: https-yopass
+  hostnames:
+    - "yopass.kim.tec.br"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: yopass
+          port: 1337
+```
+
+Access Yopass at:
+
+```
+https://yopass.kim.tec.br
+```
+
+### Using Yopass
+
+<Steps>
+  <Step title="Share a Secret">
+    1. Navigate to `https://yopass.kim.tec.br`
+    2. Enter your secret (password, token, etc.)
+    3. Choose expiration time (1 hour, 1 day, 1 week)
+    4. Optionally set one-time download
+    5. Click "Encrypt & Share"
+  </Step>
+  
+  <Step title="Copy the Link">
+    You'll receive a unique URL like:
+    
+    ```
+    https://yopass.kim.tec.br/#/s/abc123def456
+    ```
+    
+    Share this link via your preferred communication channel.
+  </Step>
+  
+  <Step title="Recipient Access">
+    The recipient clicks the link and can view the secret once (or until expiration). The secret is automatically deleted after viewing if one-time download is enabled.
+  </Step>
+</Steps>
+
+### Security Features
+
+<CardGroup cols={2}>
+  <Card title="Client-Side Encryption" icon="lock">
+    Secrets are encrypted in the browser before being sent to the server
+  </Card>
+  
+  <Card title="Time-Limited" icon="clock">
+    Secrets automatically expire after the configured time period
+  </Card>
+  
+  <Card title="One-Time Access" icon="eye">
+    Optional one-time download ensures secrets can only be viewed once
+  </Card>
+  
+  <Card title="No Persistence" icon="trash">
+    Secrets are stored in memcached (memory) and never written to disk
+  </Card>
+</CardGroup>
+
+### Best Practices
+
+<Tabs>
+  <Tab title="For Sharing Passwords">
+    - Use the shortest reasonable expiration time
+    - Enable one-time download
+    - Notify the recipient through a separate channel
+    - Don't share the link via email if possible
+  </Tab>
+  
+  <Tab title="For API Keys">
+    - Set expiration to match expected usage window
+    - Consider rotating keys after sharing
+    - Use one-time download for production keys
+    - Monitor key usage after sharing
+  </Tab>
+  
+  <Tab title="For Configuration Secrets">
+    - Bundle related secrets together
+    - Document what each secret is for
+    - Set appropriate expiration (24h for dev, 1h for prod)
+    - Revoke and regenerate if link is compromised
+  </Tab>
+</Tabs>
+
+## Managing the Tooling Namespace
+
+The tooling applications are managed via Kustomize at `overlays/kimawesome/applications/tooling/kustomization.yaml:1`:
+
+```yaml
+namespace: tooling
+resources:
+  - namespace.yaml
+  - yopass
+  - no/
+  - n8n
+```
+
+### Adding a New Tool
+
+<Steps>
+  <Step title="Create Base Manifests">
+    Add your tool's manifests to `overlays/base/your-tool/`:
+    
+    ```yaml
+    # overlays/base/your-tool/deployment.yaml
+    # overlays/base/your-tool/service.yaml
+    # overlays/base/your-tool/kustomization.yaml
+    ```
+  </Step>
+  
+  <Step title="Create Overlay">
+    Create an overlay in the tooling directory:
+    
+    ```bash
+    mkdir overlays/kimawesome/applications/tooling/your-tool
+    ```
+  </Step>
+  
+  <Step title="Add HTTPRoute">
+    Create an HTTPRoute for external access:
+    
+    ```yaml
+    # overlays/kimawesome/applications/tooling/your-tool/httproute.yaml
+    apiVersion: gateway.networking.k8s.io/v1
+    kind: HTTPRoute
+    metadata:
+      name: your-tool-route
+    spec:
+      parentRefs:
+        - name: internal-gateway
+          namespace: kube-system
+      hostnames:
+        - your-tool.internal.kim.tec.br
+    ```
+  </Step>
+  
+  <Step title="Update Kustomization">
+    Add your tool to the tooling kustomization:
+    
+    ```yaml
+    resources:
+      - namespace.yaml
+      - yopass
+      - n8n
+      - your-tool  # Add this line
+    ```
+  </Step>
+  
+  <Step title="Commit and Deploy">
+    ```bash
+    git add overlays/
+    git commit -m "Add your-tool to tooling namespace"
+    git push
+    
+    # Flux will automatically deploy
+    flux reconcile kustomization applications
+    ```
+  </Step>
+</Steps>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="n8n not accessible">
+    Check the HelmRelease status:
+    
+    ```bash
+    kubectl get helmrelease -n tooling n8n
+    flux logs --kind=HelmRelease --name=n8n --namespace=tooling
+    ```
+    
+    Verify the HTTPRoute:
+    
+    ```bash
+    kubectl get httproute -n tooling n8n
+    kubectl describe httproute -n tooling n8n
+    ```
+  </Accordion>
+  
+  <Accordion title="Yopass secrets not persisting">
+    This is expected behavior. Yopass uses memcached which stores secrets in memory only. Check the memcached sidecar:
+    
+    ```bash
+    kubectl get pods -n tooling -l app.kubernetes.io/name=yopass
+    kubectl logs -n tooling -l app.kubernetes.io/name=yopass -c yopass-memcached
+    ```
+  </Accordion>
+  
+  <Accordion title="HTTPRoutes not working">
+    Verify the Gateway is running and accepting routes:
+    
+    ```bash
+    kubectl get gateway -n kube-system
+    kubectl get httproute -n tooling
+    ```
+    
+    Check Gateway API resources:
+    
+    ```bash
+    kubectl describe gateway -n kube-system internal-gateway
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Resource Usage
+
+The tooling applications are configured with conservative resource limits:
+
+| Application | CPU Request | Memory Request | CPU Limit | Memory Limit |
+|------------|-------------|----------------|-----------|-------------|
+| n8n | (Helm default) | (Helm default) | (Helm default) | (Helm default) |
+| Yopass | 100m | 50Mi | 100m | 50Mi |
+| Memcached | 100m | 100Mi | 100m | 100Mi |
+
+<Note>
+Adjust these limits based on actual usage patterns and monitoring data.
+</Note>

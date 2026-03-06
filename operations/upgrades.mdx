@@ -1,0 +1,493 @@
+---
+title: Upgrades
+description: Upgrade Flux components, Helm charts, and core cluster infrastructure
+---
+
+## Overview
+
+This guide covers upgrading Flux itself, Helm releases, and core cluster components like Cilium and cert-manager.
+
+## Upgrade Strategy
+
+Kimbernetes uses GitOps for all upgrades:
+
+1. **Version pinning**: All Helm charts use pinned versions (e.g., `version: "=1.18.2"`)
+2. **Controlled upgrades**: Changes are committed to Git and reconciled by Flux
+3. **Rollback capability**: Git history enables easy rollbacks
+4. **Testing**: Test upgrades in `overlays/minikube/` before production
+
+## Upgrading Flux
+
+### Check Current Version
+
+```bash
+flux version
+kubectl -n flux-system get deployment -o yaml | grep 'image:.*fluxcd'
+```
+
+Current version: **v2.7.5**
+
+### Upgrade Flux CLI
+
+```bash
+# Install latest Flux CLI
+curl -s https://fluxcd.io/install.sh | sudo bash
+
+# Verify version
+flux version
+```
+
+### Upgrade Flux Controllers
+
+<Steps>
+  <Step title="Check for updates">
+    ```bash
+    flux check --pre
+    ```
+  </Step>
+  
+  <Step title="Export new manifests">
+    ```bash
+    flux install \
+      --components-extra=image-reflector-controller,image-automation-controller \
+      --export > /tmp/gotk-components.yaml
+    ```
+  </Step>
+  
+  <Step title="Update gotk-components.yaml">
+    ```bash
+    cp /tmp/gotk-components.yaml cluster/kimawesome/flux-system/gotk-components.yaml
+    ```
+  </Step>
+  
+  <Step title="Review changes">
+    ```bash
+    git diff cluster/kimawesome/flux-system/gotk-components.yaml
+    ```
+  </Step>
+  
+  <Step title="Commit and push">
+    ```bash
+    git add cluster/kimawesome/flux-system/gotk-components.yaml
+    git commit -m "Upgrade Flux to v2.8.0"
+    git push origin main
+    ```
+  </Step>
+  
+  <Step title="Monitor the upgrade">
+    ```bash
+    flux reconcile kustomization flux-system --with-source
+    kubectl -n flux-system get pods -w
+    flux check
+    ```
+  </Step>
+</Steps>
+
+<Warning>
+  Always check the [Flux release notes](https://github.com/fluxcd/flux2/releases) for breaking changes before upgrading.
+</Warning>
+
+## Upgrading HelmReleases
+
+### Check Current Versions
+
+```bash
+# List all HelmReleases
+flux get helmreleases -A
+
+# Check specific release version
+kubectl -n flux-system get helmrelease cert-manager -o yaml | grep version
+```
+
+### Upgrade a Single HelmRelease
+
+<Steps>
+  <Step title="Find available versions">
+    ```bash
+    # Add the Helm repository locally (optional)
+    helm repo add jetstack https://charts.jetstack.io
+    helm repo update
+    
+    # Search for versions
+    helm search repo cert-manager --versions | head -10
+    ```
+  </Step>
+  
+  <Step title="Update the HelmRelease version">
+    Edit `overlays/base/cert-manager/helm-release.yaml`:
+    
+    ```yaml
+    apiVersion: helm.toolkit.fluxcd.io/v2
+    kind: HelmRelease
+    metadata:
+      name: cert-manager
+      namespace: flux-system
+    spec:
+      chart:
+        spec:
+          chart: cert-manager
+          version: "=1.19.0"  # Updated from 1.18.2
+      # ...
+    ```
+  </Step>
+  
+  <Step title="Review Helm chart changes">
+    Check the chart's changelog:
+    ```bash
+    # View chart README or changelog
+    helm show readme jetstack/cert-manager --version 1.19.0
+    ```
+    
+    Look for breaking changes or required value updates.
+  </Step>
+  
+  <Step title="Commit and push">
+    ```bash
+    git add overlays/base/cert-manager/helm-release.yaml
+    git commit -m "Upgrade cert-manager to 1.19.0"
+    git push origin main
+    ```
+  </Step>
+  
+  <Step title="Monitor the upgrade">
+    ```bash
+    # Force reconciliation
+    flux reconcile helmrelease cert-manager -n flux-system
+    
+    # Watch status
+    flux get helmrelease cert-manager -n flux-system --watch
+    
+    # Check pods
+    kubectl -n cert-manager get pods -w
+    
+    # View logs if issues occur
+    flux logs --kind=HelmRelease --name=cert-manager -n flux-system
+    ```
+  </Step>
+</Steps>
+
+### Upgrade Multiple HelmReleases
+
+<Tabs>
+  <Tab title="Sequential Upgrades">
+    Upgrade components one at a time for safety:
+    
+    ```bash
+    # Update each helm-release.yaml file
+    vim overlays/base/cert-manager/helm-release.yaml
+    vim overlays/base/sealed-secrets/helm-release.yaml
+    vim overlays/base/metallb/helm-release.yaml
+    
+    git add overlays/base/*/helm-release.yaml
+    git commit -m "Upgrade cert-manager, sealed-secrets, and metallb"
+    git push origin main
+    
+    # Monitor each upgrade
+    flux get helmreleases -A --watch
+    ```
+  </Tab>
+  
+  <Tab title="Parallel Upgrades">
+    For non-dependent components:
+    
+    ```bash
+    # Update all helm-release.yaml files
+    # Commit all changes at once
+    git add overlays/base/
+    git commit -m "Upgrade monitoring stack"
+    git push origin main
+    
+    # Flux will reconcile all simultaneously
+    flux reconcile kustomization overlays --with-source
+    ```
+  </Tab>
+</Tabs>
+
+<Note>
+  Pin versions with `version: "=1.2.3"` to prevent automatic upgrades. Use `>=1.2.0 <2.0.0` for automatic minor version upgrades (not recommended for production).
+</Note>
+
+## Upgrading Core Components
+
+### Upgrade Cilium
+
+Cilium is the CNI and must be upgraded carefully:
+
+<Steps>
+  <Step title="Check current version">
+    ```bash
+    cilium version
+    kubectl -n kube-system get daemonset cilium -o yaml | grep image:
+    ```
+  </Step>
+  
+  <Step title="Review release notes">
+    Check [Cilium releases](https://github.com/cilium/cilium/releases) for breaking changes.
+  </Step>
+  
+  <Step title="Update cilium-values.yaml">
+    ```yaml
+    # cilium-values.yaml
+    cluster:
+      name: kubernetes
+    operator:
+      replicas: 1
+    routingMode: tunnel
+    tunnelProtocol: vxlan
+    gatewayAPI:
+      enabled: true
+    # Add new configuration if needed
+    ```
+  </Step>
+  
+  <Step title="Upgrade with Cilium CLI">
+    ```bash
+    # Backup current configuration
+    cilium config view > cilium-config-backup.yaml
+    
+    # Upgrade Cilium
+    cilium upgrade --version 1.17.0 \
+      --set kubeProxyReplacement=true \
+      --set k8sServiceHost=192.168.0.101 \
+      --set k8sServicePort=6443 \
+      --set nodePort.enabled=true \
+      --set gatewayAPI.enabled=true
+    
+    # Monitor upgrade
+    cilium status --wait
+    ```
+  </Step>
+  
+  <Step title="Test connectivity">
+    ```bash
+    # Run connectivity test
+    cilium connectivity test
+    
+    # Verify pods are running
+    kubectl -n kube-system get pods | grep cilium
+    ```
+  </Step>
+</Steps>
+
+<Warning>
+  Cilium upgrades can cause brief network disruptions. Schedule during maintenance windows.
+</Warning>
+
+### Upgrade cert-manager
+
+Example: `overlays/base/cert-manager/helm-release.yaml`
+
+```yaml
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: cert-manager
+  namespace: flux-system
+spec:
+  chart:
+    spec:
+      chart: cert-manager
+      version: "=1.18.2"  # Update this version
+  install:
+    crds: Create
+  upgrade:
+    crds: CreateReplace  # Ensures CRDs are updated
+  values:
+    config:
+      apiVersion: controller.config.cert-manager.io/v1alpha1
+      kind: ControllerConfiguration
+      enableGatewayAPI: true
+```
+
+<Steps>
+  <Step title="Check compatibility">
+    Review [cert-manager upgrade notes](https://cert-manager.io/docs/releases/upgrading/).
+  </Step>
+  
+  <Step title="Update version">
+    Change `version: "=1.18.2"` to `version: "=1.19.0"` in `helm-release.yaml`.
+  </Step>
+  
+  <Step title="Commit and push">
+    ```bash
+    git add overlays/base/cert-manager/
+    git commit -m "Upgrade cert-manager to 1.19.0"
+    git push origin main
+    ```
+  </Step>
+  
+  <Step title="Monitor upgrade">
+    ```bash
+    flux reconcile helmrelease cert-manager -n flux-system
+    kubectl -n cert-manager get pods -w
+    kubectl get certificates -A
+    ```
+  </Step>
+</Steps>
+
+### Upgrade sealed-secrets
+
+Example: `overlays/base/sealed-secrets/helm-release.yaml`
+
+```yaml
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: sealed-secrets
+spec:
+  chart:
+    spec:
+      chart: sealed-secrets
+      version: "=2.17.3"  # Update version here
+  interval: 24h
+  releaseName: sealed-secrets-controller
+```
+
+<Warning>
+  Backup the sealed-secrets private key before upgrading! See [Backup and Restore](/operations/backup-restore) for details.
+</Warning>
+
+### Upgrade MetalLB
+
+Example: `overlays/base/metallb/helm-release.yaml`
+
+```yaml
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: metallb
+spec:
+  chart:
+    spec:
+      chart: metallb
+      version: "=0.15.3"  # Update version
+  interval: 24h
+  install:
+    crds: Create
+  upgrade:
+    crds: CreateReplace
+```
+
+## Upgrade Rollback
+
+### Rollback via Git
+
+<Steps>
+  <Step title="Identify the commit to rollback">
+    ```bash
+    git log --oneline overlays/base/cert-manager/
+    ```
+  </Step>
+  
+  <Step title="Revert the commit">
+    ```bash
+    git revert <commit-hash>
+    git push origin main
+    ```
+  </Step>
+  
+  <Step title="Force reconciliation">
+    ```bash
+    flux reconcile helmrelease cert-manager -n flux-system --with-source
+    ```
+  </Step>
+</Steps>
+
+### Rollback via Helm (Emergency)
+
+```bash
+# List Helm release history
+helm history cert-manager -n cert-manager
+
+# Rollback to previous revision
+helm rollback cert-manager -n cert-manager
+
+# Suspend Flux to prevent it from reverting
+flux suspend helmrelease cert-manager -n flux-system
+
+# Fix in Git, then resume
+flux resume helmrelease cert-manager -n flux-system
+```
+
+<Warning>
+  Manual Helm rollbacks will be reverted by Flux. Always update Git to make changes permanent.
+</Warning>
+
+## Upgrade Testing
+
+### Test in Minikube Overlay
+
+```bash
+# Create minikube test overlay
+mkdir -p overlays/minikube
+
+# Copy and modify HelmRelease
+cp overlays/base/cert-manager/helm-release.yaml overlays/minikube/
+vim overlays/minikube/helm-release.yaml  # Update version
+
+# Create kustomization
+cat > overlays/minikube/kustomization.yaml <<EOF
+resources:
+- helm-release.yaml
+EOF
+
+# Apply to test cluster
+kubectl apply -k overlays/minikube/
+
+# Monitor
+kubectl get helmreleases -A -w
+```
+
+### Canary Upgrades
+
+For custom applications:
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: myapp
+spec:
+  replicas: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0  # Zero downtime
+  template:
+    spec:
+      containers:
+      - name: myapp
+        image: myapp:v2.0  # New version
+```
+
+## Best Practices
+
+- **Read release notes**: Always check for breaking changes before upgrading
+- **Backup first**: Backup critical components (sealed-secrets, etcd) before upgrades
+- **Test in staging**: Use `overlays/minikube/` for testing
+- **Upgrade one at a time**: Upgrade components sequentially to isolate issues
+- **Monitor logs**: Watch Flux and application logs during upgrades
+- **Pin versions**: Use `version: "=1.2.3"` to prevent unexpected upgrades
+- **Schedule maintenance windows**: Upgrade during low-traffic periods
+- **Document changes**: Commit messages should explain why the upgrade was done
+
+## Upgrade Checklist
+
+- [ ] Check release notes for breaking changes
+- [ ] Backup critical components
+- [ ] Test in staging/minikube overlay
+- [ ] Update version in helm-release.yaml
+- [ ] Review and update Helm values if needed
+- [ ] Commit with descriptive message
+- [ ] Push to Git
+- [ ] Monitor Flux reconciliation
+- [ ] Verify application functionality
+- [ ] Check logs for errors
+- [ ] Update documentation if needed
+
+## Next Steps
+
+- Learn about [Managing Resources](/operations/managing-resources)
+- Understand [Troubleshooting](/operations/troubleshooting)
+- Set up [Backup and restore](/operations/backup-restore)

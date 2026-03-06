@@ -1,0 +1,522 @@
+---
+title: Helm Releases
+description: Complete reference for all HelmRelease resources and their configurations
+---
+
+This page documents all Helm charts deployed in the cluster using Flux's HelmRelease custom resources.
+
+## Overview
+
+HelmRelease resources tell Flux how to install and manage Helm charts. They support automatic upgrades, rollbacks, and custom values.
+
+## Infrastructure Components
+
+### cert-manager
+
+Manages TLS certificates with Let's Encrypt:
+
+<Tabs>
+  <Tab title="HelmRelease">
+    ```yaml overlays/base/cert-manager/helm-release.yaml
+    apiVersion: helm.toolkit.fluxcd.io/v2
+    kind: HelmRelease
+    metadata:
+      name: cert-manager
+      namespace: flux-system
+    spec:
+      chart:
+        spec:
+          chart: cert-manager
+          reconcileStrategy: ChartVersion
+          sourceRef:
+            kind: HelmRepository
+            name: cert-manager
+            namespace: cert-manager
+          version: 1.18.2
+      interval: 1m0s
+      releaseName: cert-manager
+      targetNamespace: cert-manager
+      install:
+        crds: Create
+      upgrade:
+        crds: CreateReplace
+      values:
+        config:
+          apiVersion: controller.config.cert-manager.io/v1alpha1
+          kind: ControllerConfiguration
+          enableGatewayAPI: true
+        crds:
+          enabled: true
+    ```
+  </Tab>
+  <Tab title="Details">
+    - **Version**: 1.18.2
+    - **Namespace**: cert-manager
+    - **Features**: Gateway API support enabled
+    - **CRDs**: Automatically managed
+  </Tab>
+</Tabs>
+
+### grafana-operator
+
+Manages Grafana instances using the Grafana Operator:
+
+<Tabs>
+  <Tab title="HelmRelease">
+    ```yaml overlays/base/grafana/grafana-operator/helm-release.yaml
+    apiVersion: helm.toolkit.fluxcd.io/v2
+    kind: HelmRelease
+    metadata:
+      name: grafana-operator
+    spec:
+      timeout: 15m
+      chart:
+        spec:
+          chart: grafana-operator
+          sourceRef:
+            kind: HelmRepository
+            name: grafana
+          version: 5.21.4
+      interval: 24h
+      releaseName: grafana-operator
+      install:
+        crds: Create
+      upgrade:
+        crds: CreateReplace
+    ```
+  </Tab>
+  <Tab title="Details">
+    - **Version**: 5.21.4
+    - **Interval**: Checks for updates every 24 hours
+    - **Timeout**: 15 minutes for installation
+    - **CRDs**: Managed automatically
+  </Tab>
+</Tabs>
+
+### Prometheus Stack
+
+Complete monitoring stack with Prometheus, Alertmanager, and exporters:
+
+<Tabs>
+  <Tab title="HelmRelease">
+    ```yaml overlays/base/prometheus/helmrelease.yaml
+    apiVersion: helm.toolkit.fluxcd.io/v2
+    kind: HelmRelease
+    metadata:
+      name: prometheus
+    spec:
+      chart:
+        spec:
+          chart: kube-prometheus-stack
+          sourceRef:
+            kind: HelmRepository
+            name: prometheus
+          version: "=79.5.0"
+      interval: 24h
+      releaseName: prometheus
+      targetNamespace: observability
+      install:
+        crds: Create
+      upgrade:
+        crds: CreateReplace
+      values:
+        nodeExporter:
+          enabled: true
+        grafana:
+          enabled: false
+        prometheus:
+          prometheusSpec:
+            replicas: 2
+            retention: 2d
+            retentionSize: 25GiB
+            storageSpec:
+              volumeClaimTemplate:
+                spec:
+                  accessModes:
+                    - ReadWriteOnce
+                  resources:
+                    requests:
+                      storage: 50Gi
+                  storageClassName: local-storage
+    ```
+  </Tab>
+  <Tab title="Details">
+    - **Version**: 79.5.0
+    - **Namespace**: observability
+    - **Replicas**: 2 (High Availability)
+    - **Retention**: 2 days, max 25GiB
+    - **Storage**: 50Gi per replica
+  </Tab>
+</Tabs>
+
+### Grafana Loki
+
+Log aggregation system:
+
+```yaml overlays/base/grafana/grafana-loki/helm-release.yaml
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: grafana-loki
+spec:
+  timeout: 15m
+  chart:
+    spec:
+      chart: loki
+      sourceRef:
+        kind: HelmRepository
+        name: grafana
+      version: 6.49.0
+  interval: 24h
+  releaseName: loki-monolith
+  values:
+    deploymentMode: SingleBinary
+    singleBinary:
+      replicas: 1
+      persistence:
+        storageClass: local-storage
+      extraArgs:
+        - -store.retention=31d
+    minio:
+      enabled: true
+      persistence:
+        size: 30Gi
+        storageClass: local-storage
+```
+
+**Version**: 6.49.0  
+**Mode**: Single Binary (monolith)  
+**Retention**: 31 days  
+**Storage**: MinIO with 30Gi volume
+
+### MetalLB
+
+Bare-metal load balancer:
+
+```yaml overlays/base/metallb/helm-release.yaml
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: metallb
+spec:
+  chart:
+    spec:
+      chart: metallb
+      sourceRef:
+        kind: HelmRepository
+        name: metallb
+      version: "=0.15.3"
+  interval: 24h
+  releaseName: metallb
+  install:
+    crds: Create
+  upgrade:
+    crds: CreateReplace
+```
+
+**Version**: 0.15.3  
+**Purpose**: Provides LoadBalancer service type support
+
+### Kubernetes Gateway (kgateway)
+
+API Gateway for service routing:
+
+```yaml overlays/base/kgateway/helm-release.yaml
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: kgateway
+spec:
+  interval: 10m
+  chart:
+    spec:
+      chart: kgateway
+      sourceRef:
+        kind: HelmRepository
+        name: kgateway
+      version: "v2.1.2"
+  dependsOn:
+    - name: kgateway-crds
+```
+
+**Version**: v2.1.2  
+**Dependency**: Requires kgateway-crds to be installed first
+
+### Sealed Secrets
+
+Encrypts secrets in Git:
+
+```yaml overlays/base/sealed-secrets/helm-release.yaml
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: sealed-secrets
+spec:
+  chart:
+    spec:
+      chart: sealed-secrets
+      sourceRef:
+        kind: HelmRepository
+        name: sealed-secrets
+      version: "=2.17.3"
+  interval: 24h
+  releaseName: sealed-secrets-controller
+  install:
+    crds: Create
+  upgrade:
+    crds: CreateReplace
+  values:
+    metrics:
+      serviceMonitor:
+        enabled: false
+        namespace: sealed-secrets
+```
+
+**Version**: 2.17.3  
+**Controller**: sealed-secrets-controller
+
+### Metrics Server
+
+Provides resource metrics API:
+
+```yaml overlays/base/metrics-server/helm-release.yaml
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: metrics-server
+spec:
+  chart:
+    spec:
+      chart: metrics-server
+      sourceRef:
+        kind: HelmRepository
+        name: metrics-server
+      version: 3.13.0
+  interval: 1m0s
+  releaseName: metrics-server
+  install:
+    crds: Create
+  upgrade:
+    crds: CreateReplace
+  values:
+    args:
+      - --kubelet-insecure-tls
+```
+
+**Version**: 3.13.0  
+**Configuration**: Insecure TLS for testing environments
+
+### Grafana Alloy
+
+Telemetry collection and forwarding:
+
+```yaml overlays/base/grafana/grafana-alloy/helm-release.yaml
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: grafana-alloy
+spec:
+  timeout: 15m
+  chart:
+    spec:
+      chart: k8s-monitoring
+      sourceRef:
+        kind: HelmRepository
+        name: grafana
+      version: 3.2.2
+  interval: 24h
+  releaseName: grafana-monitoring
+  values:
+    clusterEvents:
+      enabled: true
+    podLogs:
+      enabled: true
+    nodeLogs:
+      enabled: true
+    destinations:
+      - name: loki-grafana-cloud
+        type: loki
+        url: http://loki-monolith.observability.svc:3100/loki/api/v1/push
+```
+
+**Version**: 3.2.2  
+**Chart**: k8s-monitoring  
+**Features**: Cluster events, pod logs, node logs
+
+### Tailscale Operator
+
+Manages Tailscale VPN connections:
+
+```yaml overlays/base/tailscale/helmrelease.yaml
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: tailscale-operator
+spec:
+  interval: 5m
+  chart:
+    spec:
+      chart: tailscale-operator
+      version: "=1.92.4"
+      sourceRef:
+        kind: HelmRepository
+        name: tailscale
+```
+
+**Version**: 1.92.4
+
+## Application Components
+
+### n8n
+
+Workflow automation platform:
+
+```yaml overlays/base/n8n/helm-release.yaml
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: n8n
+spec:
+  releaseName: n8n
+  interval: 5m
+  chart:
+    spec:
+      chart: n8n
+      version: "=2.0.1"
+      sourceRef:
+        kind: HelmRepository
+        name: n8n
+  values: {}
+```
+
+**Version**: 2.0.1
+
+## HelmRelease Configuration Fields
+
+<ParamField path="spec.chart.spec.chart" type="string" required>
+  Name of the Helm chart to install
+</ParamField>
+
+<ParamField path="spec.chart.spec.version" type="string" required>
+  Chart version. Use `=` prefix for exact version match: `"=1.18.2"`
+</ParamField>
+
+<ParamField path="spec.chart.spec.sourceRef" type="object" required>
+  Reference to the HelmRepository containing the chart
+</ParamField>
+
+<ParamField path="spec.interval" type="string" default="1h">
+  How often to check for chart updates. Examples: `1m0s`, `10m`, `24h`
+</ParamField>
+
+<ParamField path="spec.releaseName" type="string">
+  Name of the Helm release. Defaults to HelmRelease metadata name.
+</ParamField>
+
+<ParamField path="spec.targetNamespace" type="string">
+  Namespace where the release will be installed
+</ParamField>
+
+<ParamField path="spec.install.crds" type="string" default="Skip">
+  How to handle CRDs during installation: `Skip`, `Create`, or `CreateReplace`
+</ParamField>
+
+<ParamField path="spec.upgrade.crds" type="string" default="Skip">
+  How to handle CRDs during upgrades: `Skip`, `Create`, or `CreateReplace`
+</ParamField>
+
+<ParamField path="spec.values" type="object">
+  Custom values to pass to the Helm chart
+</ParamField>
+
+<ParamField path="spec.timeout" type="string" default="5m">
+  Timeout for installation/upgrade operations
+</ParamField>
+
+<ParamField path="spec.dependsOn" type="array">
+  List of HelmReleases or Kustomizations that must succeed first
+</ParamField>
+
+## Upgrade Strategies
+
+### Automatic Updates
+
+Flux automatically upgrades releases when:
+- The chart version changes in the HelmRelease
+- Values are updated
+- The interval elapses and a new chart version is available
+
+### Version Pinning
+
+Pin to exact versions using `=` prefix:
+
+```yaml
+version: "=1.18.2"  # Exact version
+version: ">=1.18.0" # Minimum version
+version: "~1.18.0"  # Patch updates only
+```
+
+### Rollback Configuration
+
+```yaml
+spec:
+  upgrade:
+    remediation:
+      retries: 3
+      remediateLastFailure: true
+  rollback:
+    timeout: 10m
+    recreate: true
+```
+
+## Testing Changes
+
+### Dry Run
+
+Test without applying:
+
+```bash
+flux diff helmrelease cert-manager -n flux-system
+```
+
+### Manual Upgrade
+
+Force an immediate upgrade:
+
+```bash
+flux reconcile helmrelease cert-manager -n flux-system --with-source
+```
+
+### Suspend Auto-Updates
+
+```bash
+flux suspend helmrelease prometheus
+flux resume helmrelease prometheus
+```
+
+## Monitoring Releases
+
+### Check Status
+
+```bash
+flux get helmreleases --all-namespaces
+kubectl get helmrelease -A
+```
+
+### View Release History
+
+```bash
+helm history prometheus -n observability
+```
+
+### Check Logs
+
+```bash
+flux logs --level=error --kind=HelmRelease
+```
+
+## Related Resources
+
+- [Flux Kustomizations](/reference/flux-kustomizations)
+- [Base Overlays](/reference/base-overlays)
+- [Useful Commands](/reference/useful-commands)

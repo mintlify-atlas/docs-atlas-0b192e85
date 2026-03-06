@@ -1,0 +1,748 @@
+---
+title: Kustomize Overlays
+description: Learn how Kustomize overlays enable environment-specific configurations while maintaining reusable base components
+---
+
+Kimbernetes uses **Kustomize overlays** to manage configurations across environments. This pattern allows you to define base configurations once and customize them for specific environments without duplication.
+
+## What are Kustomize Overlays?
+
+Kustomize overlays are a way to customize Kubernetes manifests without modifying the original files. Think of it as **inheritance in object-oriented programming** - you have a base class (base configuration) and derived classes (overlays) that extend or override specific properties.
+
+<CardGroup cols={2}>
+  <Card title="Base Layer" icon="layer-group">
+    Generic, reusable configurations that work across any environment
+  </Card>
+  <Card title="Overlay Layer" icon="layer-plus">
+    Environment-specific customizations that extend or patch the base
+  </Card>
+  <Card title="No Duplication" icon="copy">
+    Write configuration once, customize as needed per environment
+  </Card>
+  <Card title="Clear Separation" icon="diagram-project">
+    Infrastructure code separated from environment-specific values
+  </Card>
+</CardGroup>
+
+## The Two-Layer Pattern
+
+Kimbernetes implements a two-layer overlay structure:
+
+```
+overlays/
+├── base/              # Layer 1: Generic configurations
+│   └── cert-manager/
+│       ├── kustomization.yaml
+│       ├── namespace.yaml
+│       ├── helm-repository.yaml
+│       └── helm-release.yaml
+└── kimawesome/        # Layer 2: Environment-specific
+    └── infrastructure/
+        └── cert-manager/
+            └── kustomization.yaml  # References base + adds customizations
+```
+
+## Base Configurations
+
+Base configurations contain **environment-agnostic** definitions. They should be generic enough to work in any environment with appropriate overlays.
+
+### Example: cert-manager Base
+
+<Tabs>
+  <Tab title="kustomization.yaml">
+    The base kustomization file lists all resources:
+    
+    ```yaml
+    resources:
+      - namespace.yaml
+      - helm-repository.yaml
+      - helm-release.yaml
+    ```
+    
+    Simple and straightforward - just references the component's manifests.
+  </Tab>
+  
+  <Tab title="namespace.yaml">
+    Defines the namespace:
+    
+    ```yaml
+    apiVersion: v1
+    kind: Namespace
+    metadata:
+      name: cert-manager
+    ```
+  </Tab>
+  
+  <Tab title="helm-repository.yaml">
+    Defines the Helm chart repository:
+    
+    ```yaml
+    apiVersion: source.toolkit.fluxcd.io/v1beta2
+    kind: HelmRepository
+    metadata:
+      name: jetstack
+      namespace: cert-manager
+    spec:
+      interval: 24h
+      url: https://charts.jetstack.io
+    ```
+  </Tab>
+  
+  <Tab title="helm-release.yaml">
+    Defines the Helm release with sensible defaults:
+    
+    ```yaml
+    apiVersion: helm.toolkit.fluxcd.io/v2
+    kind: HelmRelease
+    metadata:
+      name: cert-manager
+      namespace: cert-manager
+    spec:
+      chart:
+        spec:
+          chart: cert-manager
+          sourceRef:
+            kind: HelmRepository
+            name: jetstack
+          version: "=v1.15.0"
+      interval: 24h
+      install:
+        crds: Create
+        remediation:
+          retries: 3
+      upgrade:
+        crds: CreateReplace
+        remediation:
+          retries: 3
+      values:
+        installCRDs: true
+    ```
+    
+    <Note>
+      Base configurations use generic values. No environment-specific settings like domain names, IP addresses, or credentials.
+    </Note>
+  </Tab>
+</Tabs>
+
+## Environment Overlays
+
+Environment overlays **reference the base** and add customizations. They inherit all base resources and can:
+
+- Set namespaces
+- Add additional resources
+- Patch existing resources
+- Override values
+
+### Example: cert-manager Kimawesome Overlay
+
+The kimawesome overlay for cert-manager is minimal:
+
+```yaml
+# overlays/kimawesome/infrastructure/cert-manager/kustomization.yaml
+namespace: cert-manager
+resources:
+  - ../../../base/cert-manager
+```
+
+This overlay:
+1. **References the base**: `../../../base/cert-manager` includes all base resources
+2. **Sets the namespace**: All resources will be deployed to `cert-manager` namespace
+3. **Can be extended**: Additional resources or patches can be added here
+
+### Overlay with Customizations
+
+For more complex cases, overlays can add resources and patches:
+
+```yaml
+# overlays/kimawesome/infrastructure/cert-manager/kustomization.yaml
+namespace: cert-manager
+resources:
+  - ../../../base/cert-manager
+  - cluster-issuer.yaml          # Environment-specific resource
+  - certificate.yaml             # Environment-specific certificate
+
+patches:
+  - patch: |
+      - op: add
+        path: /spec/values/prometheus
+        value:
+          enabled: true
+    target:
+      kind: HelmRelease
+      name: cert-manager
+```
+
+This adds:
+- **ClusterIssuer** resource specific to kimawesome (e.g., Let's Encrypt production)
+- **Certificate** resource for kimawesome domains
+- **Helm values patch** to enable Prometheus monitoring
+
+## Patching Strategies
+
+Kustomize supports several patching strategies for modifying resources:
+
+<Tabs>
+  <Tab title="Strategic Merge">
+    Merge new values with existing configuration:
+    
+    ```yaml
+    patches:
+      - patch: |
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: cert-manager
+            namespace: cert-manager
+          spec:
+            values:
+              replicaCount: 2
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 128Mi
+        target:
+          kind: HelmRelease
+          name: cert-manager
+    ```
+    
+    This merges the new values with existing ones in the HelmRelease.
+  </Tab>
+  
+  <Tab title="JSON Patch (RFC 6902)">
+    Precise modifications using JSON Patch operations:
+    
+    ```yaml
+    patches:
+      - patch: |
+          - op: replace
+            path: /spec/chart/spec/version
+            value: "=v1.16.0"
+          - op: add
+            path: /spec/values/featureGates
+            value: "ExperimentalGatewayAPISupport=true"
+        target:
+          kind: HelmRelease
+          name: cert-manager
+    ```
+    
+    Operations: `add`, `remove`, `replace`, `move`, `copy`, `test`
+  </Tab>
+  
+  <Tab title="Inline Patch">
+    Simple inline modifications:
+    
+    ```yaml
+    patches:
+      - target:
+          kind: Deployment
+          name: bind9
+        patch: |
+          - op: replace
+            path: /spec/replicas
+            value: 3
+    ```
+  </Tab>
+</Tabs>
+
+## Complete Example: MetalLB
+
+Let's examine a complete overlay example from Kimbernetes:
+
+<Steps>
+  <Step title="Base Configuration">
+    **overlays/base/metallb/kustomization.yaml**:
+    ```yaml
+    resources:
+      - namespace.yaml
+      - helm-repository.yaml
+      - helm-release.yaml
+    ```
+    
+    **overlays/base/metallb/helm-release.yaml**:
+    ```yaml
+    apiVersion: helm.toolkit.fluxcd.io/v2
+    kind: HelmRelease
+    metadata:
+      name: metallb
+      namespace: kube-system
+    spec:
+      chart:
+        spec:
+          chart: metallb
+          sourceRef:
+            kind: HelmRepository
+            name: metallb
+          version: "=0.15.3"
+      interval: 24h
+      releaseName: metallb
+      install:
+        crds: Create
+      upgrade:
+        crds: CreateReplace
+    ```
+  </Step>
+  
+  <Step title="Environment Overlay">
+    **overlays/kimawesome/loadbalancer/kustomization.yaml**:
+    ```yaml
+    namespace: kube-system
+    resources:
+      - ../../base/metallb
+      - ip-address-pool.yaml
+      - l2-advertisement.yaml
+    ```
+    
+    The kimawesome overlay adds environment-specific IP pools and L2 advertisement configuration.
+  </Step>
+  
+  <Step title="Environment-Specific Resources">
+    **overlays/kimawesome/loadbalancer/ip-address-pool.yaml**:
+    ```yaml
+    apiVersion: metallb.io/v1beta1
+    kind: IPAddressPool
+    metadata:
+      name: default
+      namespace: kube-system
+    spec:
+      addresses:
+        - 192.168.0.200-192.168.0.250  # kimawesome-specific IP range
+    ```
+    
+    **overlays/kimawesome/loadbalancer/l2-advertisement.yaml**:
+    ```yaml
+    apiVersion: metallb.io/v1beta1
+    kind: L2Advertisement
+    metadata:
+      name: default
+      namespace: kube-system
+    spec:
+      ipAddressPools:
+        - default
+    ```
+    
+    These resources are **specific to the kimawesome environment** and would differ in other environments.
+  </Step>
+  
+  <Step title="Flux Reconciliation">
+    **overlays/kimawesome/loadbalancer/kustomization.flux.yaml**:
+    ```yaml
+    apiVersion: kustomize.toolkit.fluxcd.io/v1beta2
+    kind: Kustomization
+    metadata:
+      name: metallb
+      namespace: kube-system
+    spec:
+      interval: 10m
+      path: "./overlays/kimawesome/loadbalancer"
+      prune: true
+      sourceRef:
+        kind: GitRepository
+        name: flux-system
+        namespace: flux-system
+    ```
+    
+    This tells Flux to reconcile the kimawesome loadbalancer overlay every 10 minutes.
+  </Step>
+</Steps>
+
+## Overlay Organization Patterns
+
+Kimbernetes organizes overlays by **function** rather than by technology:
+
+<Accordion title="loadbalancer/">
+  **Purpose**: Load balancer configuration (MetalLB)
+  
+  Contains IP address pools and L2 advertisement settings specific to the kimawesome network.
+  
+  **Why separate?**: Load balancer is foundational infrastructure that other components depend on.
+</Accordion>
+
+<Accordion title="infrastructure/">
+  **Purpose**: Core infrastructure services
+  
+  Subdirectories include:
+  - `cert-manager/` - TLS certificate management
+  - `sealed-secrets/` - Secret encryption
+  - `observability/` - Monitoring and logging stack
+  - `gatewayapi/` - Gateway API resources
+  - `vpn/` - VPN connectivity
+  
+  **Why grouped?**: These services provide infrastructure capabilities for applications.
+  
+  **Dependency**: Depends on `metallb` via `dependsOn` in Flux Kustomization.
+</Accordion>
+
+<Accordion title="applications/">
+  **Purpose**: Application workloads
+  
+  Subdirectories include:
+  - `dns-server/` - Internal DNS
+  - `tooling/` - Utility applications (n8n, yopass)
+  - `version-management/` - Version control systems
+  - `steering-k8s/` - Cluster management tools
+  
+  **Why grouped?**: These are user-facing applications that consume infrastructure services.
+</Accordion>
+
+<Accordion title="site/">
+  **Purpose**: Website and documentation
+  
+  Contains knowledge hub and article deployments.
+  
+  **Why separate?**: Website updates frequently and independently from infrastructure.
+</Accordion>
+
+## Creating a New Overlay
+
+<Steps>
+  <Step title="Create Base Configuration">
+    Create a new directory in `overlays/base/`:
+    
+    ```bash
+    mkdir -p overlays/base/myapp
+    cd overlays/base/myapp
+    ```
+    
+    Create base manifests:
+    
+    ```yaml
+    # kustomization.yaml
+    resources:
+      - namespace.yaml
+      - deployment.yaml
+      - service.yaml
+    ```
+  </Step>
+  
+  <Step title="Write Base Manifests">
+    Create generic Kubernetes manifests without environment-specific values:
+    
+    ```yaml
+    # namespace.yaml
+    apiVersion: v1
+    kind: Namespace
+    metadata:
+      name: myapp
+    ```
+    
+    ```yaml
+    # deployment.yaml
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: myapp
+      namespace: myapp
+    spec:
+      replicas: 1
+      selector:
+        matchLabels:
+          app: myapp
+      template:
+        metadata:
+          labels:
+            app: myapp
+        spec:
+          containers:
+          - name: myapp
+            image: myapp:latest
+            ports:
+            - containerPort: 8080
+    ```
+  </Step>
+  
+  <Step title="Create Environment Overlay">
+    Create the kimawesome overlay:
+    
+    ```bash
+    mkdir -p overlays/kimawesome/applications/myapp
+    cd overlays/kimawesome/applications/myapp
+    ```
+    
+    Create the overlay kustomization:
+    
+    ```yaml
+    # kustomization.yaml
+    namespace: myapp
+    resources:
+      - ../../../base/myapp
+    
+    patches:
+      - patch: |
+          - op: replace
+            path: /spec/replicas
+            value: 3
+          - op: replace
+            path: /spec/template/spec/containers/0/image
+            value: myapp:v1.2.3
+        target:
+          kind: Deployment
+          name: myapp
+    ```
+  </Step>
+  
+  <Step title="Create Flux Kustomization">
+    Create the Flux Kustomization resource:
+    
+    ```yaml
+    # kustomization.flux.yaml
+    apiVersion: kustomize.toolkit.fluxcd.io/v1beta2
+    kind: Kustomization
+    metadata:
+      name: myapp
+      namespace: flux-system
+    spec:
+      interval: 10m
+      path: "./overlays/kimawesome/applications/myapp"
+      prune: true
+      sourceRef:
+        kind: GitRepository
+        name: flux-system
+      dependsOn:
+        - name: infrastructure
+          namespace: flux-system
+    ```
+  </Step>
+  
+  <Step title="Add to Parent Kustomization">
+    Reference the new Flux Kustomization in the parent:
+    
+    ```yaml
+    # overlays/kimawesome/applications/kustomization.yaml
+    resources:
+      - dns-server/kustomization.flux.yaml
+      - tooling/kustomization.flux.yaml
+      - myapp/kustomization.flux.yaml  # Add this line
+    ```
+  </Step>
+  
+  <Step title="Commit and Push">
+    ```bash
+    git add overlays/
+    git commit -m "Add myapp overlay configuration"
+    git push
+    ```
+    
+    Flux will detect the changes within 1 minute and reconcile the new application.
+  </Step>
+</Steps>
+
+## Advanced Techniques
+
+<Tabs>
+  <Tab title="ConfigMap Generators">
+    Generate ConfigMaps from files or literals:
+    
+    ```yaml
+    configMapGenerator:
+      - name: myapp-config
+        files:
+          - config.json
+        literals:
+          - LOG_LEVEL=info
+          - ENVIRONMENT=production
+    ```
+    
+    Kustomize automatically handles ConfigMap updates by appending a hash to the name, triggering pod restarts.
+  </Tab>
+  
+  <Tab title="Secret Generators">
+    Generate secrets (use with caution - prefer Sealed Secrets):
+    
+    ```yaml
+    secretGenerator:
+      - name: myapp-secret
+        files:
+          - tls.crt
+          - tls.key
+        type: kubernetes.io/tls
+    ```
+  </Tab>
+  
+  <Tab title="Images">
+    Override container images declaratively:
+    
+    ```yaml
+    images:
+      - name: myapp
+        newName: ghcr.io/myorg/myapp
+        newTag: v1.2.3
+    ```
+    
+    This replaces any `image: myapp` references with the specified image.
+  </Tab>
+  
+  <Tab title="Namespace Transformation">
+    Automatically set namespace for all resources:
+    
+    ```yaml
+    namespace: production
+    ```
+    
+    All resources in the overlay will be deployed to the `production` namespace.
+  </Tab>
+  
+  <Tab title="Common Labels">
+    Add labels to all resources:
+    
+    ```yaml
+    commonLabels:
+      app.kubernetes.io/managed-by: flux
+      environment: production
+    ```
+  </Tab>
+  
+  <Tab title="Replica Transformation">
+    Override replicas for all Deployments:
+    
+    ```yaml
+    replicas:
+      - name: myapp
+        count: 5
+      - name: worker
+        count: 10
+    ```
+  </Tab>
+</Tabs>
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Keep Base Generic" icon="puzzle-piece">
+    Base configurations should work across environments without modification. Avoid hardcoding environment-specific values.
+  </Card>
+  
+  <Card title="Use Descriptive Names" icon="tag">
+    Name directories and files clearly. Use `helm-release.yaml`, not `release.yaml`.
+  </Card>
+  
+  <Card title="Minimize Patches" icon="wrench">
+    Prefer adding new resources over patching existing ones. Patches can become complex and hard to maintain.
+  </Card>
+  
+  <Card title="Document Overrides" icon="book">
+    Comment why environment-specific overrides exist, especially for non-obvious changes.
+  </Card>
+  
+  <Card title="Test Locally" icon="flask">
+    Use `kustomize build` to preview the final manifests before committing:
+    ```bash
+    kustomize build overlays/kimawesome/applications/myapp
+    ```
+  </Card>
+  
+  <Card title="Organize by Function" icon="diagram-project">
+    Group related components together (infrastructure, applications, etc.) rather than by technology.
+  </Card>
+</CardGroup>
+
+## Debugging Overlays
+
+<Tabs>
+  <Tab title="Build Locally">
+    Preview what Flux will apply:
+    
+    ```bash
+    # Build a specific overlay
+    kustomize build overlays/kimawesome/infrastructure/cert-manager
+    
+    # Pipe to kubectl to validate
+    kustomize build overlays/kimawesome/infrastructure/cert-manager | kubectl apply --dry-run=client -f -
+    ```
+  </Tab>
+  
+  <Tab title="Check Flux Build">
+    See what Flux built and applied:
+    
+    ```bash
+    flux get kustomization infrastructure -n flux-system
+    flux logs --kind=Kustomization --name=infrastructure -n flux-system
+    ```
+  </Tab>
+  
+  <Tab title="Validate Syntax">
+    Check for YAML syntax errors:
+    
+    ```bash
+    yamllint overlays/
+    kustomize build overlays/kimawesome/ > /dev/null
+    ```
+  </Tab>
+  
+  <Tab title="Diff Changes">
+    See what changed between commits:
+    
+    ```bash
+    git diff main overlays/kimawesome/infrastructure/
+    
+    # Or build both versions
+    git show main:overlays/kimawesome/infrastructure/cert-manager/kustomization.yaml
+    ```
+  </Tab>
+</Tabs>
+
+## Troubleshooting Common Issues
+
+<Accordion title="Error: No resources found">
+  **Cause**: The `kustomization.yaml` doesn't reference any manifests.
+  
+  **Solution**: Ensure the `resources` list includes all necessary files or directories:
+  ```yaml
+  resources:
+    - namespace.yaml
+    - deployment.yaml
+  ```
+</Accordion>
+
+<Accordion title="Error: Resource already exists">
+  **Cause**: Multiple overlays are trying to create the same resource.
+  
+  **Solution**: 
+  - Check for duplicate resource definitions
+  - Use namespaces to isolate resources
+  - Ensure only one Kustomization manages each resource
+</Accordion>
+
+<Accordion title="Patch not applying">
+  **Cause**: The target selector doesn't match any resources.
+  
+  **Solution**: Verify the target kind, name, and namespace match exactly:
+  ```yaml
+  target:
+    kind: HelmRelease
+    name: exact-name-here
+    namespace: correct-namespace
+  ```
+</Accordion>
+
+<Accordion title="Values not merging correctly">
+  **Cause**: Kustomize strategic merge vs JSON patch confusion.
+  
+  **Solution**: For complex value overrides, use JSON patch with explicit paths:
+  ```yaml
+  patches:
+    - patch: |
+        - op: replace
+          path: /spec/values/image/tag
+          value: v1.2.3
+      target:
+        kind: HelmRelease
+        name: myapp
+  ```
+</Accordion>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Adding Applications" icon="plus" href="/operations/managing-resources">
+    Step-by-step guide to adding new applications using overlays
+  </Card>
+  <Card title="Managing Secrets" icon="lock" href="/infrastructure/sealed-secrets">
+    Learn how to handle secrets in overlays with Sealed Secrets
+  </Card>
+  <Card title="Flux Components" icon="cubes" href="/architecture/flux-components">
+    Understand how the kustomize-controller processes overlays
+  </Card>
+  <Card title="Repository Structure" icon="folder-tree" href="/architecture/repository-structure">
+    Review the complete repository organization
+  </Card>
+</CardGroup>

@@ -1,0 +1,335 @@
+---
+title: DNS Server (BIND9)
+description: Internal DNS server configuration and management
+---
+
+## Overview
+
+The cluster runs a BIND9 DNS server to provide internal name resolution for both cluster services and local network devices. The DNS server is deployed in the `dns-server` namespace and exposed via a LoadBalancer service with a fixed IP address.
+
+## Architecture
+
+The DNS server consists of:
+
+- **Deployment**: 2 replicas of BIND9 running on Ubuntu 22.04
+- **Service**: LoadBalancer type with fixed IP `192.168.10.3`
+- **ConfigMap**: Zone files and named.conf configuration
+- **Integration**: CoreDNS forwarding for cluster-internal resolution
+
+## Deployment Configuration
+
+The BIND9 deployment is defined in `overlays/base/bind9/deployment.yaml:1`:
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bind9
+  labels:
+    app: bind9
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: bind9
+  template:
+    metadata:
+      labels:
+        app: bind9
+    spec:
+      containers:
+        - name: bind9
+          image: ubuntu/bind9:9.18-22.04_edge
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: BIND9_USER
+              value: "root"
+            - name: "TZ"
+              value: "America/Sao_Paul"
+          ports:
+            - name: dns
+              containerPort: 53
+              protocol: UDP
+            - name: dns-tcp
+              containerPort: 53
+              protocol: TCP
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+          volumeMounts:
+            - name: bind-config
+              mountPath: /etc/bind/
+            - name: bind-cache
+              mountPath: /var/cache/bind
+            - name: bind-records
+              mountPath: /var/lib/bind
+      volumes:
+        - name: bind-config
+          configMap:
+            name: bind9-config
+        - name: bind-cache
+          emptyDir: {}
+        - name: bind-records
+          emptyDir: {}
+```
+
+<Note>
+The deployment uses `emptyDir` volumes for cache and records, meaning DNS data is ephemeral and resets on pod restart. Zone files are managed through ConfigMaps.
+</Note>
+
+## Service Configuration
+
+The DNS server is exposed via a LoadBalancer service at `overlays/base/bind9/service.yaml:1`:
+
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: bind9
+spec:
+  selector:
+    app: bind9
+  ports:
+    - name: dns
+      port: 53
+      targetPort: 53
+      protocol: UDP
+    - name: dns-tcp
+      port: 53
+      targetPort: 53
+      protocol: TCP
+  type: LoadBalancer
+  loadBalancerIP: "192.168.10.3"
+```
+
+The fixed IP address `192.168.10.3` is configured via the service patch in `overlays/kimawesome/applications/dns-server/service.patch.yaml:6`.
+
+## DNS Configuration
+
+### named.conf
+
+The main BIND9 configuration at `overlays/kimawesome/applications/dns-server/config/named.conf:1`:
+
+```conf
+options {
+    directory "/var/cache/bind";
+    recursion yes;
+    edns-udp-size 4096;
+    max-udp-size 4096;
+    dnssec-validation auto;
+    querylog yes;
+    allow-transfer { none; };
+    forwarders {
+        189.28.176.25;
+        1.1.1.1;
+    };
+    allow-query { any; };
+    version "Not disclosed";
+};
+
+zone "internal.kim.tec.br" IN {
+    type master;
+    file "/etc/bind/internal-kim-tec-br.zone";
+};
+```
+
+<Tabs>
+  <Tab title="Recursion">
+    The server is configured to handle recursive queries, forwarding to:
+    - `189.28.176.25` (ISP DNS)
+    - `1.1.1.1` (Cloudflare)
+  </Tab>
+  
+  <Tab title="Security">
+    - Zone transfers are disabled
+    - DNSSEC validation is enabled
+    - Version is hidden for security
+    - Query logging is enabled for monitoring
+  </Tab>
+  
+  <Tab title="Zones">
+    Master zone for `internal.kim.tec.br` domain serving internal network records
+  </Tab>
+</Tabs>
+
+### Zone File
+
+The internal zone file at `overlays/kimawesome/applications/dns-server/config/internal-kim-tec-br.zone:1` defines local network records:
+
+```zone
+$TTL 2d
+
+$ORIGIN internal.kim.tec.br.
+
+@   IN  SOA ns.internal.kim.tec.br. kim.ae09.gmail.com (
+            2026020600
+            12h ; refresh
+            15m ; retry
+            3w ; expire
+            2h ; minimum ttl
+            )
+
+    IN  NS  ns.internal.kim.tec.br.
+
+ns  IN  A   192.168.10.3
+
+; Kubernetes nodes
+k8s-controlplane    IN  A   192.168.0.101
+k8s-node01          IN  A   192.168.0.102
+
+; Network devices
+camera-quarto       IN  A   192.168.0.108
+camera-sala         IN  A   192.168.0.196
+impressora          IN  A   192.168.0.99
+router1             IN  A   192.168.0.1
+
+; Services
+luck-of-the-day     IN  A   192.168.10.2
+n8n                 IN  A   192.168.10.2
+nas                 IN  A   192.168.0.104
+media               IN  A   192.168.0.110
+```
+
+## Using the DNS Server
+
+<Steps>
+  <Step title="From Within the Cluster">
+    Cluster pods automatically use CoreDNS, which forwards queries to BIND9 for the internal domain.
+    
+    ```bash
+    # Test DNS resolution from a pod
+    kubectl run -it --rm debug --image=busybox --restart=Never -- nslookup k8s-controlplane.internal.kim.tec.br
+    ```
+  </Step>
+  
+  <Step title="From Local Network">
+    Configure your device to use `192.168.10.3` as the DNS server.
+    
+    ```bash
+    # Test from local machine
+    nslookup k8s-controlplane.internal.kim.tec.br 192.168.10.3
+    ```
+  </Step>
+  
+  <Step title="Verify DNS Server Status">
+    Check that the DNS server pods are running:
+    
+    ```bash
+    kubectl get pods -n dns-server
+    kubectl logs -n dns-server -l app=bind9
+    ```
+  </Step>
+</Steps>
+
+## Managing DNS Records
+
+<Steps>
+  <Step title="Edit the Zone File">
+    Update the zone file in your Git repository:
+    
+    ```bash
+    vim overlays/kimawesome/applications/dns-server/config/internal-kim-tec-br.zone
+    ```
+  </Step>
+  
+  <Step title="Update Serial Number">
+    Increment the serial number in the SOA record:
+    
+    ```zone
+    @   IN  SOA ns.internal.kim.tec.br. kim.ae09.gmail.com (
+                2026020601  ; Increment this number
+                ...
+    ```
+  </Step>
+  
+  <Step title="Commit and Push">
+    Commit your changes to trigger Flux reconciliation:
+    
+    ```bash
+    git add overlays/kimawesome/applications/dns-server/config/
+    git commit -m "Add DNS record for new device"
+    git push
+    ```
+  </Step>
+  
+  <Step title="Wait for Reconciliation">
+    Flux will automatically update the ConfigMap and restart the pods:
+    
+    ```bash
+    # Watch for changes
+    flux reconcile kustomization applications --with-source
+    
+    # Verify the update
+    kubectl get configmap -n dns-server bind9-config -o yaml
+    ```
+  </Step>
+</Steps>
+
+## CoreDNS Integration
+
+The cluster's CoreDNS is configured to forward queries to BIND9 via `overlays/kimawesome/applications/kustomization.yaml:7`:
+
+```yaml
+configMapGenerator:
+  - name: coredns-custom
+    namespace: kube-system
+    options:
+      disableNameSuffixHash: true
+    files:
+      - "kimtec.server=dns-server/config/kimtec.server"
+```
+
+This allows cluster pods to resolve internal domain names transparently.
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="DNS queries not resolving">
+    Check the DNS server pods and logs:
+    
+    ```bash
+    kubectl get pods -n dns-server
+    kubectl logs -n dns-server -l app=bind9 --tail=50
+    ```
+    
+    Verify the LoadBalancer IP is assigned:
+    
+    ```bash
+    kubectl get svc -n dns-server bind9
+    ```
+  </Accordion>
+  
+  <Accordion title="ConfigMap not updating">
+    Force Flux to reconcile:
+    
+    ```bash
+    flux reconcile source git flux-system
+    flux reconcile kustomization applications
+    ```
+    
+    Verify the ConfigMap content:
+    
+    ```bash
+    kubectl get configmap -n dns-server bind9-config -o yaml
+    ```
+  </Accordion>
+  
+  <Accordion title="Zone transfer errors">
+    Zone transfers are intentionally disabled. If you need zone transfers, update the `allow-transfer` directive in `named.conf`.
+  </Accordion>
+</AccordionGroup>
+
+## Resource Limits
+
+The DNS server is configured with the following resource limits at `overlays/base/bind9/deployment.yaml:33`:
+
+- **Requests**: 256Mi memory, 100m CPU
+- **Limits**: 512Mi memory, 500m CPU
+
+<Note>
+These limits are suitable for a small to medium-sized network. Adjust based on query volume and performance monitoring.
+</Note>

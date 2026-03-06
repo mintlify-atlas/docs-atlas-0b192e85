@@ -1,0 +1,153 @@
+---
+title: "Introduction"
+description: "GitOps-based Kubernetes cluster management with FluxCD for the Kimawesome infrastructure"
+---
+
+## Welcome to Kimbernetes K8s Flux
+
+Kimbernetes K8s Flux is a comprehensive GitOps repository that manages the entire lifecycle of the Kimawesome Kubernetes cluster. Built on FluxCD, this infrastructure-as-code approach ensures declarative, version-controlled, and automated deployment of all cluster resources.
+
+<CardGroup cols={2}>
+  <Card title="Quick Start" icon="rocket" href="/quickstart">
+    Get your cluster up and running quickly
+  </Card>
+  <Card title="Architecture Overview" icon="diagram-project" href="/architecture/overview">
+    Understand the system design and components
+  </Card>
+  <Card title="Setup Guide" icon="wrench" href="/setup/prerequisites">
+    Step-by-step installation instructions
+  </Card>
+  <Card title="Reference" icon="book" href="/reference/flux-kustomizations">
+    Configuration reference and examples
+  </Card>
+</CardGroup>
+
+## Key Features
+
+<CardGroup cols={2}>
+  <Card title="GitOps with FluxCD" icon="git">
+    Declarative cluster management with automated reconciliation from Git
+  </Card>
+  <Card title="Kustomize Overlays" icon="layer-group">
+    Environment-specific configurations using base and overlay patterns
+  </Card>
+  <Card title="Comprehensive Observability" icon="chart-line">
+    Full monitoring stack with Grafana, Prometheus, Loki, and Alloy
+  </Card>
+  <Card title="Certificate Management" icon="shield-check">
+    Automated TLS certificate provisioning with cert-manager
+  </Card>
+  <Card title="Load Balancing" icon="scale-balanced">
+    MetalLB for bare-metal load balancer support
+  </Card>
+  <Card title="Secure Secrets" icon="lock">
+    Encrypted secrets management with sealed-secrets
+  </Card>
+  <Card title="Gateway API" icon="network-wired">
+    Modern API gateway with Cilium and kgateway
+  </Card>
+  <Card title="Infrastructure as Code" icon="code">
+    Everything versioned, reviewable, and reproducible
+  </Card>
+</CardGroup>
+
+## What's Included
+
+### Infrastructure Components
+
+The cluster includes essential infrastructure services:
+
+- **Networking**: Cilium CNI with kube-proxy replacement and Gateway API support
+- **Load Balancer**: MetalLB for exposing services on bare-metal
+- **Certificates**: cert-manager for automated TLS certificate management
+- **Secrets**: Sealed-secrets for encrypting sensitive data in Git
+- **Metrics**: metrics-server for resource utilization tracking
+- **Gateway**: kgateway for API gateway functionality
+
+### Observability Stack
+
+Complete monitoring and logging solution:
+
+- **Grafana Operator**: Manages Grafana instances and dashboards
+- **Prometheus**: Metrics collection and alerting
+- **Grafana Alloy**: Telemetry data pipeline and collection
+- **Loki**: Log aggregation and querying
+
+### Applications
+
+Production workloads managed by Flux:
+
+- **DNS Server**: bind9 for internal DNS resolution
+- **Knowledge Hub**: Documentation and knowledge management
+- **Tooling**: n8n automation and yopass secret sharing
+- **Version Management**: MySQL-backed version control systems
+
+## Repository Structure
+
+```
+kimbernetes-k8s-flux/
+├── cluster/
+│   └── kimawesome/
+│       └── flux-system/         # Flux system components
+└── overlays/
+    ├── base/                    # Base configurations
+    │   ├── cert-manager/
+    │   ├── grafana/
+    │   ├── metallb/
+    │   └── ...
+    └── kimawesome/              # Environment-specific overlays
+        ├── infrastructure/      # Core infrastructure
+        ├── applications/        # Application deployments
+        └── site/               # Site-specific resources
+```
+
+## How It Works
+
+<Steps>
+  <Step title="Declare Desired State">
+    Define your infrastructure and applications as YAML manifests in this Git repository
+  </Step>
+  <Step title="Flux Monitors Repository">
+    FluxCD continuously watches the repository for changes
+  </Step>
+  <Step title="Automatic Reconciliation">
+    When changes are detected, Flux automatically applies them to the cluster
+  </Step>
+  <Step title="Self-Healing">
+    If cluster state drifts from Git, Flux corrects it automatically
+  </Step>
+</Steps>
+
+## Getting Started
+
+<CardGroup cols={2}>
+  <Card title="Prerequisites" icon="list-check" href="/setup/prerequisites">
+    System requirements and dependencies
+  </Card>
+  <Card title="Cluster Installation" icon="server" href="/setup/cluster-installation">
+    Install Kubernetes with kubeadm and Cilium
+  </Card>
+  <Card title="Bootstrap Flux" icon="arrows-rotate" href="/setup/flux-bootstrap">
+    Initialize FluxCD in your cluster
+  </Card>
+  <Card title="Initial Configuration" icon="gear" href="/setup/initial-configuration">
+    Configure core infrastructure components
+  </Card>
+</CardGroup>
+
+## Need Help?
+
+<CardGroup cols={2}>
+  <Card title="Troubleshooting" icon="circle-question" href="/operations/troubleshooting">
+    Common issues and solutions
+  </Card>
+  <Card title="Useful Commands" icon="terminal" href="/reference/useful-commands">
+    Quick reference for common operations
+  </Card>
+  <Card title="GitHub Repository" icon="github" href="https://github.com/kim-ae/kimbernetes-k8s-flux">
+    View source code and contribute
+  </Card>
+  <Card title="External Resources" icon="link" href="/reference/external-resources">
+    FluxCD, Kubernetes, and related documentation
+  </Card>
+</CardGroup>

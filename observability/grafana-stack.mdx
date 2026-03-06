@@ -1,0 +1,343 @@
+---
+title: Grafana Stack
+description: Visualization platform with operator-managed instances and datasources
+---
+
+Grafana provides a unified visualization platform for metrics and logs in the Kimbernetes cluster. It's deployed using the Grafana Operator, which enables declarative management of Grafana instances, datasources, and dashboards through Kubernetes custom resources.
+
+## HelmRelease Configuration
+
+Grafana is deployed via the `grafana-operator` HelmRelease:
+
+```yaml overlays/base/grafana/grafana-operator/helm-release.yaml
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: grafana-operator
+spec:
+  timeout: 15m
+  chart:
+    spec:
+      chart: grafana-operator
+      sourceRef:
+        kind: HelmRepository
+        name: grafana
+      version: 5.21.4
+  interval: 24h
+  releaseName: grafana-operator
+  install:
+    crds: Create
+  upgrade:
+    crds: CreateReplace
+```
+
+<Note>
+  The operator version 5.21.4 includes support for Grafana v11+ and enhanced CRD management.
+</Note>
+
+## Grafana Instance
+
+The Grafana instance is defined as a custom resource:
+
+```yaml overlays/kimawesome/infrastructure/observability/grafana-operator/grafana.yaml
+apiVersion: grafana.integreatly.org/v1beta1
+kind: Grafana
+metadata:
+  name: grafana
+  labels:
+    app: grafana
+spec:
+  config:
+    log:
+      mode: "console"
+  disableDefaultAdminSecret: true
+  deployment:
+    spec:
+      template:
+        spec:
+          containers:
+            - name: grafana
+              env:
+                - name: GF_SECURITY_ADMIN_USER
+                  valueFrom:
+                    secretKeyRef:
+                      key: GF_SECURITY_ADMIN_USER
+                      name: credentials
+                - name: GF_SECURITY_ADMIN_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      key: GF_SECURITY_ADMIN_PASSWORD
+                      name: credentials
+          volumes:
+            - name: grafana-data
+              persistentVolumeClaim:
+                claimName: grafana-pvc
+```
+
+### Key Features
+
+- **Persistent Storage**: Data is stored in a PVC for persistence across restarts
+- **Secret Management**: Admin credentials stored in SealedSecret
+- **Console Logging**: JSON logs for integration with Loki
+
+## Datasources
+
+Grafana is pre-configured with datasources for the observability stack:
+
+<Tabs>
+  <Tab title="Prometheus">
+    ```yaml
+    apiVersion: grafana.integreatly.org/v1beta1
+    kind: GrafanaDatasource
+    metadata:
+      name: prometheus
+    spec:
+      instanceSelector:
+        matchLabels:
+          app: "grafana"
+      datasource:
+        name: prometheus
+        type: prometheus
+        access: proxy
+        basicAuth: false
+        url: http://prometheus-kube-prometheus-prometheus:9090
+        isDefault: true
+        jsonData:
+          "tlsSkipVerify": true
+          "timeInterval": "5s"
+    ```
+    
+    <Note>
+      Prometheus is set as the default datasource with a 5-second minimum time interval.
+    </Note>
+  </Tab>
+  
+  <Tab title="Loki">
+    ```yaml
+    apiVersion: grafana.integreatly.org/v1beta1
+    kind: GrafanaDatasource
+    metadata:
+      name: loki
+    spec:
+      instanceSelector:
+        matchLabels:
+          app: "grafana"
+      datasource:
+        name: loki
+        type: loki
+        access: proxy
+        basicAuth: false
+        url: http://loki-monolith.observability.svc:3100
+        jsonData:
+          "tlsSkipVerify": true
+    ```
+    
+    <Note>
+      Loki datasource connects to the monolith deployment via the internal service URL.
+    </Note>
+  </Tab>
+</Tabs>
+
+## Accessing Grafana
+
+<Steps>
+  <Step title="Get the HTTPRoute URL">
+    Grafana is exposed via Gateway API HTTPRoute:
+    
+    ```bash
+    kubectl get httproute -n observability grafana-route -o yaml
+    ```
+  </Step>
+  
+  <Step title="Retrieve Credentials">
+    Admin credentials are stored in the `credentials` secret:
+    
+    ```bash
+    # Get username
+    kubectl get secret credentials -n observability \
+      -o jsonpath='{.data.GF_SECURITY_ADMIN_USER}' | base64 -d
+    
+    # Get password
+    kubectl get secret credentials -n observability \
+      -o jsonpath='{.data.GF_SECURITY_ADMIN_PASSWORD}' | base64 -d
+    ```
+  </Step>
+  
+  <Step title="Log In">
+    Navigate to the HTTPRoute URL and log in with the retrieved credentials.
+  </Step>
+</Steps>
+
+## Creating Custom Dashboards
+
+Dashboards can be managed declaratively using the `GrafanaDashboard` CRD:
+
+```yaml
+apiVersion: grafana.integreatly.org/v1beta1
+kind: GrafanaDashboard
+metadata:
+  name: my-dashboard
+  namespace: observability
+spec:
+  instanceSelector:
+    matchLabels:
+      app: grafana
+  json: |
+    {
+      "dashboard": {
+        "title": "My Dashboard",
+        "panels": [
+          {
+            "title": "CPU Usage",
+            "targets": [
+              {
+                "expr": "rate(container_cpu_usage_seconds_total[5m])"
+              }
+            ]
+          }
+        ]
+      }
+    }
+```
+
+<Accordion title="Import Dashboard from JSON File">
+  ```yaml
+  apiVersion: grafana.integreatly.org/v1beta1
+  kind: GrafanaDashboard
+  metadata:
+    name: imported-dashboard
+    namespace: observability
+  spec:
+    instanceSelector:
+      matchLabels:
+        app: grafana
+    configMapRef:
+      name: dashboard-configmap
+      key: dashboard.json
+  ```
+</Accordion>
+
+## Common PromQL Queries
+
+Here are some useful queries for building dashboards:
+
+<CodeGroup>
+  ```promql CPU Usage by Pod
+  rate(container_cpu_usage_seconds_total{
+    namespace="default",
+    pod=~".*"
+  }[5m])
+  ```
+  
+  ```promql Memory Usage by Namespace
+  sum by (namespace) (
+    container_memory_working_set_bytes{}
+  )
+  ```
+  
+  ```promql Flux HelmRelease Status
+  gotk_resource_info{
+    exported_namespace="flux-system",
+    customresource_kind="HelmRelease"
+  }
+  ```
+  
+  ```promql Pod Restart Count
+  increase(kube_pod_container_status_restarts_total[1h])
+  ```
+</CodeGroup>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Grafana pod not starting">
+    Check the operator logs:
+    
+    ```bash
+    kubectl logs -n observability -l app.kubernetes.io/name=grafana-operator
+    ```
+    
+    Verify the PVC is bound:
+    
+    ```bash
+    kubectl get pvc grafana-pvc -n observability
+    ```
+  </Accordion>
+  
+  <Accordion title="Datasource not connecting">
+    Verify service endpoints are available:
+    
+    ```bash
+    # Check Prometheus
+    kubectl get svc -n observability prometheus-kube-prometheus-prometheus
+    
+    # Check Loki
+    kubectl get svc -n observability loki-monolith
+    ```
+    
+    Test connectivity from a debug pod:
+    
+    ```bash
+    kubectl run -it --rm debug --image=curlimages/curl --restart=Never -- \
+      curl http://prometheus-kube-prometheus-prometheus.observability.svc:9090/-/healthy
+    ```
+  </Accordion>
+  
+  <Accordion title="Dashboard not appearing">
+    Check the GrafanaDashboard resource status:
+    
+    ```bash
+    kubectl get grafanadashboard -n observability
+    kubectl describe grafanadashboard my-dashboard -n observability
+    ```
+    
+    Verify the instance selector matches:
+    
+    ```bash
+    kubectl get grafana -n observability --show-labels
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Persistence Configuration
+
+Grafana data is stored on a persistent volume:
+
+```yaml overlays/kimawesome/infrastructure/observability/grafana-operator/grafana-persistence.yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: grafana-pvc
+  namespace: observability
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+  storageClassName: local-storage
+```
+
+<Warning>
+  The PVC uses `local-storage` storage class. Ensure you have a PersistentVolume available or update the storage class to match your environment.
+</Warning>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Query Metrics" href="./prometheus">
+    Learn PromQL and create custom queries
+  </Card>
+  
+  <Card title="Search Logs" href="./loki">
+    Use LogQL to analyze application logs
+  </Card>
+  
+  <Card title="Configure Alloy" href="./alloy">
+    Customize telemetry collection
+  </Card>
+  
+  <Card title="Observability Overview" href="./overview">
+    Return to architecture overview
+  </Card>
+</CardGroup>

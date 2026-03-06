@@ -1,0 +1,558 @@
+---
+title: Useful Commands
+description: Essential commands for managing and troubleshooting your Kubernetes cluster
+---
+
+Quick reference for common commands used to manage, debug, and operate the Kubernetes cluster with Flux, Cilium, and other components.
+
+## Flux CLI Commands
+
+Manage GitOps resources and check reconciliation status.
+
+### Get Resources
+
+<CodeGroup>
+```bash All Resources
+flux get all
+```
+
+```bash Kustomizations
+flux get kustomizations
+flux get kustomizations --all-namespaces
+flux get ks flux-system
+```
+
+```bash HelmReleases
+flux get helmreleases
+flux get hr --all-namespaces
+flux get hr cert-manager -n flux-system
+```
+
+```bash Sources
+flux get sources all
+flux get sources git
+flux get sources helm
+```
+</CodeGroup>
+
+### Reconcile Resources
+
+Force immediate reconciliation:
+
+<CodeGroup>
+```bash Reconcile Kustomization
+flux reconcile kustomization flux-system
+flux reconcile ks flux-system --with-source
+```
+
+```bash Reconcile HelmRelease
+flux reconcile helmrelease cert-manager -n flux-system
+flux reconcile hr prometheus -n flux-system --with-source
+```
+
+```bash Reconcile Source
+flux reconcile source git flux-system
+```
+</CodeGroup>
+
+### Suspend and Resume
+
+Temporarily stop automatic reconciliation:
+
+<CodeGroup>
+```bash Suspend
+flux suspend kustomization infrastructure
+flux suspend helmrelease prometheus -n flux-system
+```
+
+```bash Resume
+flux resume kustomization infrastructure
+flux resume helmrelease prometheus -n flux-system
+```
+</CodeGroup>
+
+### View Logs
+
+<CodeGroup>
+```bash All Flux Logs
+flux logs
+flux logs --all-namespaces
+```
+
+```bash Filter by Level
+flux logs --level=error
+flux logs --level=info --since=10m
+```
+
+```bash Specific Controller
+flux logs --kind=Kustomization --name=flux-system
+flux logs --kind=HelmRelease --name=cert-manager
+```
+</CodeGroup>
+
+### Export Configuration
+
+Export Flux resources:
+
+```bash
+flux export kustomization flux-system
+flux export helmrelease cert-manager -n flux-system
+flux export source git flux-system
+```
+
+### Check Dependencies
+
+View resource dependency tree:
+
+```bash
+flux tree kustomization flux-system
+flux tree kustomization infrastructure
+```
+
+### Diff Changes
+
+Preview changes before applying:
+
+```bash
+flux diff kustomization flux-system --path=./cluster/kimawesome
+flux diff helmrelease prometheus -n flux-system
+```
+
+## kubectl Commands
+
+Standard Kubernetes operations.
+
+### Get Resources
+
+<CodeGroup>
+```bash Pods
+kubectl get pods
+kubectl get pods -n observability
+kubectl get pods --all-namespaces
+kubectl get pods -o wide
+```
+
+```bash Services
+kubectl get svc
+kubectl get svc -n metallb-system
+kubectl get svc --all-namespaces
+```
+
+```bash Deployments
+kubectl get deployments
+kubectl get deploy -n cert-manager
+kubectl get deploy --show-labels
+```
+
+```bash All Resources
+kubectl get all
+kubectl get all -n observability
+```
+</CodeGroup>
+
+### Describe Resources
+
+Get detailed information:
+
+<CodeGroup>
+```bash Describe Pod
+kubectl describe pod <pod-name>
+kubectl describe pod -n observability <pod-name>
+```
+
+```bash Describe Service
+kubectl describe svc <service-name>
+kubectl describe svc metallb -n metallb-system
+```
+
+```bash Describe Node
+kubectl describe node <node-name>
+```
+</CodeGroup>
+
+### View Logs
+
+<CodeGroup>
+```bash Pod Logs
+kubectl logs <pod-name>
+kubectl logs <pod-name> -n observability
+kubectl logs <pod-name> --follow
+kubectl logs <pod-name> --tail=100
+```
+
+```bash Container Logs
+kubectl logs <pod-name> -c <container-name>
+```
+
+```bash Previous Container
+kubectl logs <pod-name> --previous
+```
+</CodeGroup>
+
+### Execute Commands
+
+<CodeGroup>
+```bash Shell Access
+kubectl exec -it <pod-name> -- /bin/bash
+kubectl exec -it <pod-name> -n observability -- /bin/sh
+```
+
+```bash Run Command
+kubectl exec <pod-name> -- ls -la /app
+kubectl exec <pod-name> -n observability -- env
+```
+</CodeGroup>
+
+### Port Forwarding
+
+Access services locally:
+
+<CodeGroup>
+```bash Forward Pod Port
+kubectl port-forward pod/<pod-name> 8080:80
+kubectl port-forward -n observability pod/prometheus-0 9090:9090
+```
+
+```bash Forward Service Port
+kubectl port-forward svc/grafana 3000:3000 -n observability
+kubectl port-forward svc/prometheus 9090:9090 -n observability
+```
+</CodeGroup>
+
+### Apply and Delete
+
+<CodeGroup>
+```bash Apply
+kubectl apply -f manifest.yaml
+kubectl apply -k overlays/kimawesome/infrastructure/
+kubectl apply -f . --recursive
+```
+
+```bash Delete
+kubectl delete -f manifest.yaml
+kubectl delete pod <pod-name>
+kubectl delete namespace <namespace>
+```
+
+```bash Dry Run
+kubectl apply -f manifest.yaml --dry-run=client
+kubectl apply -f manifest.yaml --dry-run=server
+```
+</CodeGroup>
+
+### Scale Resources
+
+```bash
+kubectl scale deployment <name> --replicas=3
+kubectl scale deployment -n observability prometheus --replicas=2
+```
+
+### Rollout Management
+
+<CodeGroup>
+```bash Rollout Status
+kubectl rollout status deployment/<name>
+kubectl rollout status deployment/grafana -n observability
+```
+
+```bash Rollout History
+kubectl rollout history deployment/<name>
+```
+
+```bash Rollback
+kubectl rollout undo deployment/<name>
+kubectl rollout undo deployment/<name> --to-revision=2
+```
+</CodeGroup>
+
+### Resource Usage
+
+```bash
+kubectl top nodes
+kubectl top pods
+kubectl top pods -n observability
+kubectl top pods --all-namespaces
+```
+
+## Kustomize Commands
+
+Build and preview Kustomize configurations.
+
+<CodeGroup>
+```bash Build
+kubectl kustomize overlays/base/cert-manager/
+kubectl kustomize overlays/kimawesome/infrastructure/
+```
+
+```bash Apply
+kubectl apply -k overlays/kimawesome/infrastructure/
+```
+
+```bash Diff
+kubectl diff -k overlays/kimawesome/infrastructure/
+```
+</CodeGroup>
+
+## Cilium Commands
+
+Manage Cilium CNI and network policies.
+
+### Status Check
+
+<CodeGroup>
+```bash Cilium Status
+cilium status
+cilium status --wait
+```
+
+```bash Node Status
+cilium node list
+```
+
+```bash Connectivity
+cilium connectivity test
+cilium connectivity test --test <test-name>
+```
+</CodeGroup>
+
+### Monitor Traffic
+
+<CodeGroup>
+```bash Monitor All
+cilium monitor
+```
+
+```bash Monitor Specific Pod
+cilium monitor --related-to <pod-name>
+```
+
+```bash Monitor Dropped Packets
+cilium monitor --type drop
+```
+</CodeGroup>
+
+### Network Policies
+
+```bash
+cilium policy get
+cilium policy validate policy.yaml
+```
+
+### Troubleshooting
+
+```bash
+cilium debuginfo
+cilium troubleshoot
+```
+
+## Helm Commands
+
+Manage Helm releases directly.
+
+### List Releases
+
+<CodeGroup>
+```bash All Releases
+helm list --all-namespaces
+```
+
+```bash Namespace Releases
+helm list -n observability
+helm list -n cert-manager
+```
+</CodeGroup>
+
+### Release Information
+
+<CodeGroup>
+```bash Status
+helm status prometheus -n observability
+```
+
+```bash History
+helm history prometheus -n observability
+```
+
+```bash Values
+helm get values prometheus -n observability
+helm get values prometheus -n observability --all
+```
+
+```bash Manifest
+helm get manifest prometheus -n observability
+```
+</CodeGroup>
+
+### Rollback
+
+```bash
+helm rollback prometheus -n observability
+helm rollback prometheus 2 -n observability
+```
+
+## kubeseal Commands
+
+Manage Sealed Secrets for secure secret storage.
+
+### Create Sealed Secret
+
+<CodeGroup>
+```bash From File
+kubeseal -f secret.yaml -w sealed-secret.yaml
+```
+
+```bash From stdin
+echo -n "mysecret" | kubectl create secret generic mysecret \
+  --dry-run=client \
+  --from-file=password=/dev/stdin \
+  -o yaml | kubeseal -o yaml > sealed-secret.yaml
+```
+
+```bash With Scope
+kubeseal -f secret.yaml -w sealed-secret.yaml --scope cluster-wide
+kubeseal -f secret.yaml -w sealed-secret.yaml --scope namespace-wide
+```
+</CodeGroup>
+
+### Fetch Certificate
+
+```bash
+kubeseal --fetch-cert > pub-cert.pem
+kubeseal --fetch-cert --controller-namespace=sealed-secrets
+```
+
+### Encrypt Value
+
+```bash
+echo -n "mypassword" | kubeseal --raw \
+  --name=mysecret \
+  --namespace=default \
+  --from-file=/dev/stdin
+```
+
+## Cert-Manager Commands
+
+Manage TLS certificates.
+
+### Check Resources
+
+<CodeGroup>
+```bash Certificates
+kubectl get certificates --all-namespaces
+kubectl get cert -n default
+kubectl describe certificate <cert-name>
+```
+
+```bash Certificate Requests
+kubectl get certificaterequest --all-namespaces
+kubectl get cr -n default
+```
+
+```bash Issuers
+kubectl get issuer --all-namespaces
+kubectl get clusterissuer
+```
+</CodeGroup>
+
+### Renew Certificate
+
+```bash
+kubectl delete certificaterequest <request-name>
+# cert-manager will automatically create a new request
+```
+
+## Debugging Commands
+
+### Network Debugging
+
+<CodeGroup>
+```bash DNS Resolution
+kubectl run -it --rm debug --image=busybox --restart=Never -- nslookup kubernetes.default
+```
+
+```bash Connectivity Test
+kubectl run -it --rm debug --image=nicolaka/netshoot --restart=Never -- bash
+```
+
+```bash Curl Test
+kubectl run -it --rm debug --image=curlimages/curl --restart=Never -- \
+  curl http://service-name.namespace.svc.cluster.local
+```
+</CodeGroup>
+
+### Event Monitoring
+
+```bash
+kubectl get events --all-namespaces --sort-by='.lastTimestamp'
+kubectl get events -n flux-system --watch
+kubectl get events --field-selector type=Warning
+```
+
+### Resource Issues
+
+```bash
+kubectl describe node <node-name> | grep -A 5 Allocated
+kubectl get pods --all-namespaces --field-selector=status.phase=Pending
+kubectl get pods --all-namespaces --field-selector=status.phase=Failed
+```
+
+## Quick Diagnostics
+
+### Cluster Health Check
+
+```bash
+#!/bin/bash
+echo "=== Nodes ==="
+kubectl get nodes
+
+echo "\n=== Flux Status ==="
+flux get all
+
+echo "\n=== Failed Pods ==="
+kubectl get pods --all-namespaces --field-selector=status.phase!=Running,status.phase!=Succeeded
+
+echo "\n=== Recent Events ==="
+kubectl get events --all-namespaces --sort-by='.lastTimestamp' | tail -10
+```
+
+### Component Status
+
+```bash
+#!/bin/bash
+echo "Cilium:" && cilium status --brief
+echo "cert-manager:" && kubectl get pods -n cert-manager
+echo "MetalLB:" && kubectl get pods -n metallb-system
+echo "Prometheus:" && kubectl get pods -n observability -l app.kubernetes.io/name=prometheus
+```
+
+## Aliases
+
+Useful shell aliases to add to your `~/.bashrc` or `~/.zshrc`:
+
+```bash
+alias k='kubectl'
+alias kgp='kubectl get pods'
+alias kgs='kubectl get svc'
+alias kgn='kubectl get nodes'
+alias kdp='kubectl describe pod'
+alias kl='kubectl logs'
+alias kex='kubectl exec -it'
+
+alias f='flux'
+alias fga='flux get all'
+alias fgk='flux get kustomizations'
+alias fgh='flux get helmreleases'
+alias frk='flux reconcile kustomization'
+alias frh='flux reconcile helmrelease'
+
+alias kustomize='kubectl kustomize'
+alias kg='kubectl get'
+alias kd='kubectl describe'
+alias ka='kubectl apply -f'
+```
+
+## Related Resources
+
+- [Flux Kustomizations](/reference/flux-kustomizations)
+- [HelmReleases Reference](/reference/helm-releases)
+- [External Resources](/reference/external-resources)

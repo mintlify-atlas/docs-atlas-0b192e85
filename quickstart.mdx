@@ -1,80 +1,375 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: 'Quickstart'
+description: 'Get your Kubernetes cluster running with FluxCD in under 30 minutes'
 ---
 
-## Get started in three steps
+This quickstart guide will walk you through setting up a Kubernetes cluster from scratch with Cilium CNI and FluxCD GitOps. By the end, you'll have a fully functional cluster with automatic synchronization from your Git repository.
 
-Get your documentation site running locally and make your first customization.
+## Prerequisites
 
-### Step 1: Set up your local environment
+Before you begin, ensure you have:
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
+- A Linux machine with root access
+- Basic familiarity with Kubernetes concepts
+- A GitHub account and repository for your Flux configuration
+- GitHub Personal Access Token with repo permissions
+
+## System Preparation
+
+<Steps>
+  <Step title="Enable IP forwarding">
+    IP forwarding is required for Kubernetes networking:
+
+    ```bash
+    # Permanent configuration
+    echo "net.ipv4.ip_forward=1" | sudo tee -a /etc/sysctl.conf
+    sudo sysctl -p
+    ```
+  </Step>
+
+  <Step title="Disable swap">
+    Kubernetes requires swap to be disabled:
+
+    ```bash
+    sudo swapoff -a
+    sudo sed -i '/swap/s/^/#/' /etc/fstab
+    sudo systemctl mask swap.target
     
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
+    # Verify swap is disabled
+    swapon --show
+    ```
+  </Step>
+
+  <Step title="Configure containerd">
+    Create or modify `/etc/containerd/config.toml`:
+
+    ```bash
+    sudo containerd config default > /etc/containerd/config.toml
+    ```
+
+    Update the configuration to enable SystemdCgroup:
+
+    ```toml
+    version = 2
+
+    [plugins]
+      [plugins."io.containerd.grpc.v1.cri"]
+        [plugins."io.containerd.grpc.v1.cri".containerd]
+          [plugins."io.containerd.grpc.v1.cri".containerd.runtimes]
+            [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc]
+              runtime_type = "io.containerd.runc.v2"
+              [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc.options]
+                SystemdCgroup = true
+    ```
+
+    Restart containerd:
+
+    ```bash
+    sudo systemctl restart containerd
+    ```
+  </Step>
+</Steps>
+
+## Install Kubernetes Components
+
+<Steps>
+  <Step title="Install kubeadm, kubelet, and kubectl">
+    Install Kubernetes v1.33.0:
+
+    ```bash
+    sudo apt-get update
+    sudo apt-get install -y apt-transport-https ca-certificates curl gpg
+
+    # Add Kubernetes apt repository
+    curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.33/deb/Release.key | \
+      sudo gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
     
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
+    echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.33/deb/ /' | \
+      sudo tee /etc/apt/sources.list.d/kubernetes.list
 
-### Step 2: Deploy your changes
+    # Install specific version
+    sudo apt-get update
+    sudo apt-get install -y kubelet=1.33.0-1.1 kubeadm=1.33.0-1.1 kubectl=1.33.0-1.1
+    sudo apt-mark hold kubelet kubeadm kubectl
+    ```
+  </Step>
 
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
+  <Step title="Initialize the cluster">
+    <Note>
+      Replace `192.168.0.101` with your control plane node's IP address. The `--skip-phases=addon/kube-proxy` flag is crucial because Cilium will replace kube-proxy.
+    </Note>
+
+    ```bash
+    sudo kubeadm init \
+      --skip-phases=addon/kube-proxy \
+      --apiserver-advertise-address=192.168.0.101 \
+      --pod-network-cidr="10.1.0.0/16" \
+      --upload-certs
+    ```
+
+    Configure kubectl access:
+
+    ```bash
+    mkdir -p $HOME/.kube
+    sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
+    sudo chown $(id -u):$(id -g) $HOME/.kube/config
+    ```
+  </Step>
+
+  <Step title="Add worker nodes (optional)">
+    If you want to add worker nodes, use the `kubeadm join` command that was output from the `kubeadm init` command. It will look similar to:
+
+    ```bash
+    kubeadm join 192.168.0.101:6443 --token <token> \
+      --discovery-token-ca-cert-hash sha256:<hash>
+    ```
+  </Step>
+</Steps>
+
+## Install Cilium CNI
+
+Cilium provides advanced networking capabilities and replaces kube-proxy.
+
+<Steps>
+  <Step title="Install Cilium CLI">
+    Download and install the Cilium CLI tool:
+
+    ```bash
+    CILIUM_CLI_VERSION=$(curl -s https://raw.githubusercontent.com/cilium/cilium-cli/main/stable.txt)
+    CLI_ARCH=amd64
+    if [ "$(uname -m)" = "aarch64" ]; then CLI_ARCH=arm64; fi
     
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
+    curl -L --fail --remote-name-all \
+      https://github.com/cilium/cilium-cli/releases/download/${CILIUM_CLI_VERSION}/cilium-linux-${CLI_ARCH}.tar.gz{,.sha256sum}
+    
+    sha256sum --check cilium-linux-${CLI_ARCH}.tar.gz.sha256sum
+    sudo tar xzvfC cilium-linux-${CLI_ARCH}.tar.gz /usr/local/bin
+    rm cilium-linux-${CLI_ARCH}.tar.gz{,.sha256sum}
+    ```
 
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
+    <Note>
+      For more installation options, see the [Cilium documentation](https://docs.cilium.io/en/stable/installation/k8s-install-kubeadm/).
+    </Note>
+  </Step>
 
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
+  <Step title="Install Cilium with Gateway API support">
+    <Note>
+      Replace `192.168.0.101` with your control plane node's IP address.
+    </Note>
 
-### Step 3: Go live
+    ```bash
+    cilium install \
+      --set kubeProxyReplacement=true \
+      --set k8sServiceHost=192.168.0.101 \
+      --set k8sServicePort=6443 \
+      --set nodePort.enabled=true \
+      --set gatewayAPI.enabled=true
+    ```
 
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
+    This configuration:
+    - Enables kube-proxy replacement
+    - Configures the API server address
+    - Enables NodePort support
+    - Enables Gateway API support for advanced ingress capabilities
+  </Step>
 
-## Next steps
+  <Step title="Verify Cilium installation">
+    Wait for Cilium to be ready:
 
-Now that you have your docs running, explore these key features:
+    ```bash
+    cilium status --wait
+    ```
+
+    You should see output indicating all components are healthy.
+  </Step>
+</Steps>
+
+## Bootstrap FluxCD
+
+FluxCD will continuously synchronize your cluster state with your Git repository.
+
+<Steps>
+  <Step title="Set up your GitHub repository">
+    Make sure you have:
+    - A GitHub repository (can be private or public)
+    - A GitHub Personal Access Token with repo permissions
+    - Your repository contains the FluxCD configuration structure
+  </Step>
+
+  <Step title="Bootstrap Flux">
+    <Warning>
+      Replace the placeholders with your actual GitHub username, repository name, and path to the cluster configuration.
+    </Warning>
+
+    ```bash
+    export GITHUB_TOKEN="<your-github-token>"
+    
+    flux bootstrap github \
+      --owner=<your-github-username> \
+      --repository=<your-repo-name> \
+      --private=false \
+      --personal=true \
+      --path=cluster/kimawesome \
+      --token-auth=false \
+      --read-write-key=true \
+      --components-extra='image-reflector-controller,image-automation-controller'
+    ```
+
+    This command:
+    - Creates a deploy key in your repository
+    - Installs FluxCD components in the cluster
+    - Sets up continuous synchronization
+    - Includes image automation controllers for automatic image updates
+  </Step>
+
+  <Step title="Verify Flux installation">
+    Check that all Flux components are running:
+
+    ```bash
+    flux check
+    kubectl -n flux-system get pods
+    ```
+
+    You should see pods for:
+    - source-controller
+    - kustomize-controller
+    - helm-controller
+    - notification-controller
+    - image-reflector-controller
+    - image-automation-controller
+  </Step>
+
+  <Step title="Monitor synchronization">
+    Watch Flux synchronize your cluster:
+
+    ```bash
+    flux get kustomizations --watch
+    ```
+
+    This will show the status of all Kustomizations being applied to your cluster.
+  </Step>
+</Steps>
+
+## Verify Your Cluster
+
+<Steps>
+  <Step title="Check node status">
+    ```bash
+    kubectl get nodes
+    ```
+
+    All nodes should show `Ready` status.
+  </Step>
+
+  <Step title="Check Flux resources">
+    ```bash
+    kubectl get gitrepositories -A
+    kubectl get kustomizations -A
+    kubectl get helmreleases -A
+    ```
+
+    These commands show the GitOps resources that Flux is managing.
+  </Step>
+
+  <Step title="View cluster components">
+    ```bash
+    kubectl get pods -A
+    ```
+
+    You should see pods in various namespaces including:
+    - `flux-system` - FluxCD controllers
+    - `kube-system` - Kubernetes system components and Cilium
+  </Step>
+</Steps>
+
+## Next Steps
+
+Now that your cluster is running with FluxCD, you can:
 
 <CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
+  <Card title="Configure Infrastructure" icon="server" href="/infrastructure/networking">
+    Set up MetalLB, cert-manager, and other infrastructure components
+  </Card>
+  
+  <Card title="Deploy Applications" icon="rocket" href="/applications/overview">
+    Deploy your applications using GitOps workflows
+  </Card>
+  
+  <Card title="Manage Secrets" icon="lock" href="/infrastructure/sealed-secrets">
+    Configure sealed-secrets for secure secret management
+  </Card>
+  
+  <Card title="Set Up Monitoring" icon="chart-line" href="/observability/overview">
+    Deploy the Grafana stack for observability
+  </Card>
 </CardGroup>
 
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Cilium pods not starting">
+    Check Cilium status:
+    ```bash
+    cilium status
+    cilium connectivity test
+    ```
+    
+    Review Cilium logs:
+    ```bash
+    kubectl -n kube-system logs -l k8s-app=cilium
+    ```
+  </Accordion>
+
+  <Accordion title="Flux not synchronizing">
+    Check Flux logs:
+    ```bash
+    flux logs --all-namespaces
+    ```
+    
+    Verify Git repository access:
+    ```bash
+    flux get sources git
+    ```
+  </Accordion>
+
+  <Accordion title="kubeadm init fails">
+    Common issues:
+    - Ensure swap is disabled: `swapon --show`
+    - Check if ports 6443, 10250, 10259, 10257 are available
+    - Verify containerd is running: `sudo systemctl status containerd`
+    
+    View kubeadm logs:
+    ```bash
+    journalctl -xeu kubelet
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Reference Configuration
+
+The repository structure used in this guide:
+
+```
+.
+├── cluster/
+│   └── kimawesome/
+│       ├── flux-system/          # Flux system components
+│       ├── kustomization.yaml    # Cluster-level kustomization
+│       └── kustomization.flux.yaml  # Overlay kustomization
+├── overlays/
+│   ├── base/                     # Base configurations
+│   │   ├── cert-manager/
+│   │   ├── metallb/
+│   │   ├── sealed-secrets/
+│   │   ├── kgateway/
+│   │   └── grafana/
+│   └── kimawesome/               # Environment-specific overlays
+│       ├── infrastructure/
+│       ├── applications/
+│       └── site/
+└── cilium-values.yaml            # Cilium configuration
+```
+
 <Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
+  The `kustomization.flux.yaml` in your cluster directory points to the overlays for your environment, enabling GitOps management of all infrastructure and applications.
 </Note>

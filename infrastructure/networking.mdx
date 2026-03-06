@@ -1,0 +1,224 @@
+---
+title: 'Networking with Cilium'
+description: 'Configure Cilium CNI for cluster networking with kube-proxy replacement and Gateway API support'
+---
+
+## Overview
+
+Cilium is the Container Network Interface (CNI) provider for the cluster, offering advanced networking, security, and observability features. It replaces kube-proxy and provides native support for the Kubernetes Gateway API.
+
+## Key Features
+
+- **Kube-proxy replacement**: Uses eBPF for efficient packet processing
+- **VXLAN tunneling**: Overlay network for pod-to-pod communication
+- **Gateway API support**: Native integration with Kubernetes Gateway API
+- **Network policies**: Advanced security and traffic control
+
+## Configuration
+
+The Cilium configuration is defined in `cilium-values.yaml`:
+
+```yaml cilium-values.yaml
+cluster:
+  name: kubernetes
+operator:
+  replicas: 1
+routingMode: tunnel
+tunnelProtocol: vxlan
+gatewayAPI:
+  enabled: true
+```
+
+### Configuration Parameters
+
+<ParamField path="cluster.name" type="string" default="kubernetes">
+  The cluster name used by Cilium for identification
+</ParamField>
+
+<ParamField path="operator.replicas" type="integer" default="1">
+  Number of Cilium operator replicas to run
+</ParamField>
+
+<ParamField path="routingMode" type="string" default="tunnel">
+  Routing mode for pod traffic. Options: `tunnel`, `native`
+</ParamField>
+
+<ParamField path="tunnelProtocol" type="string" default="vxlan">
+  Tunneling protocol when using tunnel routing mode. Options: `vxlan`, `geneve`
+</ParamField>
+
+<ParamField path="gatewayAPI.enabled" type="boolean" default="true">
+  Enable Gateway API support for advanced traffic management
+</ParamField>
+
+## Routing Modes
+
+<Tabs>
+  <Tab title="Tunnel Mode (VXLAN)">
+    Tunnel mode encapsulates pod traffic using VXLAN, providing an overlay network that works in most environments:
+
+    ```yaml
+    routingMode: tunnel
+    tunnelProtocol: vxlan
+    ```
+
+    **Advantages:**
+    - Works with any network infrastructure
+    - No BGP or routing protocol required
+    - Simplified network configuration
+
+    **Use case:** Default mode for most deployments
+  </Tab>
+
+  <Tab title="Native Routing">
+    Native routing mode uses the underlying network's routing capabilities:
+
+    ```yaml
+    routingMode: native
+    ```
+
+    **Advantages:**
+    - Better performance (no encapsulation overhead)
+    - Lower CPU usage
+    - Direct network visibility
+
+    **Requirements:**
+    - Requires L3 network configuration
+    - Often used with BGP
+
+    **Use case:** Advanced deployments with BGP peering
+  </Tab>
+</Tabs>
+
+## Network Policies
+
+Cilium supports standard Kubernetes NetworkPolicy resources for controlling traffic between pods:
+
+<CodeGroup>
+```yaml allow-from-namespace.yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-from-frontend
+  namespace: backend
+spec:
+  podSelector:
+    matchLabels:
+      app: api
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: frontend
+```
+
+```yaml deny-all.yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: deny-all-ingress
+  namespace: production
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+```
+</CodeGroup>
+
+## Verifying Cilium Status
+
+<Steps>
+  <Step title="Check Cilium pods">
+    Verify that Cilium pods are running:
+
+    ```bash
+    kubectl get pods -n kube-system -l k8s-app=cilium
+    ```
+
+    Expected output:
+    ```
+    NAME           READY   STATUS    RESTARTS   AGE
+    cilium-xxxxx   1/1     Running   0          5d
+    cilium-yyyyy   1/1     Running   0          5d
+    ```
+  </Step>
+
+  <Step title="Check Cilium operator">
+    Verify the Cilium operator is running:
+
+    ```bash
+    kubectl get pods -n kube-system -l name=cilium-operator
+    ```
+  </Step>
+
+  <Step title="Test connectivity">
+    Verify pod-to-pod connectivity:
+
+    ```bash
+    kubectl run test-pod --image=busybox --rm -it -- wget -O- http://kubernetes.default.svc.cluster.local
+    ```
+  </Step>
+</Steps>
+
+## Gateway API Integration
+
+With Gateway API enabled, Cilium provides native support for Gateway resources:
+
+```yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: example-route
+spec:
+  parentRefs:
+    - name: my-gateway
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /api
+      backendRefs:
+        - name: api-service
+          port: 8080
+```
+
+<Note>
+  Gateway API support is enabled in the Cilium configuration and works seamlessly with the kgateway controller.
+</Note>
+
+## Troubleshooting
+
+### Check Cilium status
+
+```bash
+kubectl exec -n kube-system ds/cilium -- cilium status
+```
+
+### View Cilium logs
+
+```bash
+kubectl logs -n kube-system -l k8s-app=cilium --tail=100
+```
+
+### Connectivity test
+
+Run Cilium's connectivity test:
+
+```bash
+kubectl exec -n kube-system ds/cilium -- cilium connectivity test
+```
+
+## Best Practices
+
+<Tip>
+  - Use tunnel mode (VXLAN) for most deployments unless you have specific native routing requirements
+  - Monitor Cilium operator logs for any issues
+  - Implement NetworkPolicies for security between namespaces
+  - Enable Gateway API for advanced traffic management capabilities
+</Tip>
+
+<Warning>
+  Changing the routing mode or tunnel protocol requires recreating pods and may cause temporary network disruption.
+</Warning>

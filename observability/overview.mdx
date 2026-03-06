@@ -1,0 +1,193 @@
+---
+title: Observability Overview
+description: Comprehensive observability stack with metrics, logs, and visualization
+---
+
+The Kimbernetes cluster includes a complete observability stack that provides real-time monitoring, logging, and visualization capabilities. The stack is built on industry-standard tools including Grafana, Prometheus, Loki, and Alloy, all managed declaratively through Flux HelmReleases.
+
+## Architecture
+
+The observability stack follows a unified telemetry collection pipeline:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    Data Sources                              │
+│  • Pod Logs        • Node Logs      • Cluster Events         │
+│  • Metrics         • Custom Metrics • Service Monitors       │
+└─────────────────┬───────────────────────────────────────────┘
+                  │
+                  ▼
+┌─────────────────────────────────────────────────────────────┐
+│                  Grafana Alloy                               │
+│  Unified telemetry collector with intelligent routing        │
+│  • Log collection from pods and nodes                        │
+│  • Metric scraping from exporters                            │
+│  • Label extraction and enrichment                           │
+└─────────────┬───────────────────────────────────────────────┘
+                  │
+       ┌──────────┴───────────┐
+       ▼                      ▼
+┌──────────────┐      ┌──────────────┐
+│  Prometheus  │      │     Loki     │
+│   Metrics    │      │     Logs     │
+│   Storage    │      │   Storage    │
+└──────┬───────┘      └──────┬───────┘
+       │                     │
+       └──────────┬──────────┘
+                  ▼
+         ┌────────────────┐
+         │    Grafana     │
+         │ Visualization  │
+         │  & Dashboards  │
+         └────────────────┘
+```
+
+## Stack Components
+
+<CardGroup cols={2}>
+  <Card title="Grafana Stack" icon="chart-line" href="./grafana-stack">
+    Visualization platform with operator-managed instances, datasources, and dashboards
+  </Card>
+  
+  <Card title="Prometheus" icon="database" href="./prometheus">
+    High-performance metrics collection and storage with 2-day retention and 25GiB capacity
+  </Card>
+  
+  <Card title="Grafana Alloy" icon="arrow-progress" href="./alloy">
+    Unified telemetry collector for logs, metrics, and events with intelligent routing
+  </Card>
+  
+  <Card title="Loki" icon="scroll" href="./loki">
+    Log aggregation system with 31-day retention and S3-compatible storage
+  </Card>
+</CardGroup>
+
+## Telemetry Flow
+
+<Steps>
+  <Step title="Collection">
+    Grafana Alloy runs as a DaemonSet on every node, collecting:
+    - **Pod logs** from all containers with automatic label extraction
+    - **Node logs** from systemd journal (kubelet, containerd)
+    - **Cluster events** from the Kubernetes API
+    - **Metrics** from node-exporter and Kepler
+  </Step>
+  
+  <Step title="Processing">
+    Alloy enriches telemetry data with:
+    - Cluster and namespace labels
+    - Pod controller and application names
+    - Node names and container images
+    - Custom labels for filtering
+  </Step>
+  
+  <Step title="Storage">
+    Data is routed to appropriate backends:
+    - **Logs** → Loki with MinIO S3 storage backend
+    - **Metrics** → Prometheus with local persistent volumes
+  </Step>
+  
+  <Step title="Visualization">
+    Grafana provides:
+    - Pre-configured datasources for Prometheus and Loki
+    - Custom dashboards for cluster health
+    - Query interface for LogQL and PromQL
+  </Step>
+</Steps>
+
+## Key Features
+
+### High Availability
+
+- **Prometheus**: 2 replicas with hard pod anti-affinity
+- **Alloy**: DaemonSet deployment ensures coverage on all nodes
+- **Loki**: SingleBinary mode with persistent storage
+
+### Data Retention
+
+| Component | Retention Period | Storage Capacity |
+|-----------|------------------|------------------|
+| Prometheus | 2 days | 25 GiB per replica |
+| Loki | 31 days | 30 GiB (MinIO) |
+| Alertmanager | N/A | 50 GiB |
+
+### Flux Integration
+
+The observability stack includes custom metrics for Flux resources:
+
+```yaml
+metrics:
+  - gotk_resource_info (Kustomizations)
+  - gotk_resource_info (HelmReleases)
+  - gotk_resource_info (GitRepositories)
+  - gotk_resource_info (HelmRepositories)
+```
+
+These metrics enable monitoring of GitOps deployments directly in Grafana.
+
+## Access Grafana
+
+<Note>
+  Grafana is exposed via HTTPRoute at your cluster's configured domain. Check the HTTPRoute configuration in `overlays/kimawesome/infrastructure/observability/grafana-operator/httproute.yaml`.
+</Note>
+
+Default credentials are stored in a SealedSecret:
+
+```bash
+kubectl get secret credentials -n observability -o jsonpath='{.data.GF_SECURITY_ADMIN_USER}' | base64 -d
+```
+
+## ServiceMonitor and PodMonitor
+
+Prometheus automatically discovers metrics endpoints using:
+
+- **ServiceMonitors**: For services exposing metrics
+- **PodMonitors**: For pods with direct metrics endpoints
+
+<Accordion title="Example: MetalLB PodMonitor">
+  ```yaml
+  apiVersion: monitoring.coreos.com/v1
+  kind: PodMonitor
+  metadata:
+    name: metallb-monitor
+    namespace: observability
+  spec:
+    selector:
+      matchLabels:
+        app.kubernetes.io/instance: metallb
+    namespaceSelector:
+      any: true
+    podMetricsEndpoints:
+    - port: "monitoring"
+      interval: 30s
+      path: /metrics
+  ```
+</Accordion>
+
+## Configuration Files
+
+All observability components are defined in:
+
+- **Base**: `overlays/base/grafana/` and `overlays/base/prometheus/`
+- **Environment**: `overlays/kimawesome/infrastructure/observability/`
+- **Kustomization**: `overlays/kimawesome/infrastructure/observability/kustomization.yaml:1`
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Configure Grafana" href="./grafana-stack">
+    Set up dashboards and datasources
+  </Card>
+  
+  <Card title="Add Service Monitors" href="./prometheus">
+    Expose custom application metrics
+  </Card>
+  
+  <Card title="Query Logs" href="./loki">
+    Search and analyze application logs
+  </Card>
+  
+  <Card title="Customize Alloy" href="./alloy">
+    Configure telemetry collection
+  </Card>
+</CardGroup>

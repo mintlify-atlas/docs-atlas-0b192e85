@@ -1,0 +1,272 @@
+---
+title: Flux Kustomizations
+description: Complete reference for all Kustomization resources in the repository
+---
+
+This page documents all Flux Kustomization resources used to manage the cluster configuration with GitOps.
+
+## What is a Kustomization?
+
+A Flux Kustomization is a custom resource that tells Flux how to reconcile Kubernetes manifests from a Git repository. It watches a source (like a GitRepository) and applies the manifests found at the specified path.
+
+## Core Kustomization Resources
+
+### flux-system Kustomization
+
+The root Kustomization that bootstraps the entire cluster:
+
+```yaml cluster/kimawesome/flux-system/gotk-sync.yaml
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: flux-system
+  namespace: flux-system
+spec:
+  interval: 10m0s
+  path: ./cluster/kimawesome
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: flux-system
+```
+
+<ParamField path="spec.interval" type="string" required>
+  How often Flux checks the source for changes. Format: `10m0s`, `1h`, `30s`
+</ParamField>
+
+<ParamField path="spec.path" type="string" required>
+  Path within the Git repository to reconcile. Relative to repository root.
+</ParamField>
+
+<ParamField path="spec.prune" type="boolean" default="false">
+  When `true`, Flux removes resources from the cluster that are no longer in Git.
+</ParamField>
+
+<ParamField path="spec.sourceRef" type="object" required>
+  Reference to the source (GitRepository, Bucket, or OCIRepository) containing the manifests.
+</ParamField>
+
+### overlays Kustomization
+
+Manages the environment-specific overlay configurations:
+
+```yaml cluster/kimawesome/kustomization.flux.yaml
+apiVersion: kustomize.toolkit.fluxcd.io/v1beta2
+kind: Kustomization
+metadata:
+  name: overlays
+  namespace: flux-system
+spec:
+  interval: 10m
+  path: "./overlays/kimawesome"
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: flux-system
+```
+
+This Kustomization applies all environment overlays for the `kimawesome` cluster.
+
+### infrastructure Kustomization
+
+Manages infrastructure components with dependencies:
+
+```yaml overlays/kimawesome/infrastructure/kustomization.flux.yaml
+apiVersion: kustomize.toolkit.fluxcd.io/v1beta2
+kind: Kustomization
+metadata:
+  name: infrastructure
+  namespace: flux-system
+spec:
+  interval: 10m
+  path: "./overlays/kimawesome/infrastructure"
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: flux-system
+  dependsOn:
+    - name: metallb
+      namespace: kube-system
+```
+
+<ParamField path="spec.dependsOn" type="array">
+  List of Kustomizations or HelmReleases that must be ready before this one is applied.
+  
+  ```yaml
+  dependsOn:
+    - name: metallb
+      namespace: kube-system
+    - name: cert-manager
+      namespace: cert-manager
+  ```
+</ParamField>
+
+## Configuration Fields
+
+### Source Reference
+
+The `sourceRef` field tells Flux where to find the manifests:
+
+<CodeGroup>
+```yaml GitRepository Source
+sourceRef:
+  kind: GitRepository
+  name: flux-system
+  namespace: flux-system  # optional
+```
+
+```yaml Bucket Source
+sourceRef:
+  kind: Bucket
+  name: my-bucket
+  namespace: flux-system
+```
+
+```yaml OCI Repository
+sourceRef:
+  kind: OCIRepository
+  name: my-oci-repo
+  namespace: flux-system
+```
+</CodeGroup>
+
+### Health Checks
+
+Configure custom health checks for resources:
+
+```yaml
+spec:
+  healthChecks:
+    - apiVersion: apps/v1
+      kind: Deployment
+      name: my-app
+      namespace: default
+  timeout: 5m
+```
+
+### Post-Build Variable Substitution
+
+Use variable substitution in manifests:
+
+```yaml
+spec:
+  postBuild:
+    substitute:
+      CLUSTER_NAME: "kimawesome"
+      DOMAIN: "kim.tec.br"
+    substituteFrom:
+      - kind: ConfigMap
+        name: cluster-vars
+```
+
+Then in your manifests:
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+data:
+  cluster: ${CLUSTER_NAME}
+  domain: ${DOMAIN}
+```
+
+## Reconciliation Behavior
+
+### Automatic Reconciliation
+
+- Flux checks the source at the interval specified in `spec.interval`
+- If changes are detected, Flux applies them automatically
+- Resources are created, updated, or deleted based on the manifests
+
+### Manual Reconciliation
+
+Force immediate reconciliation:
+
+```bash
+flux reconcile kustomization flux-system
+flux reconcile kustomization overlays --with-source
+```
+
+### Suspension
+
+Temporarily stop reconciliation:
+
+```bash
+flux suspend kustomization infrastructure
+flux resume kustomization infrastructure
+```
+
+## Dependencies and Ordering
+
+Kustomizations can depend on other Kustomizations or HelmReleases:
+
+```yaml
+spec:
+  dependsOn:
+    - name: cert-manager
+      namespace: cert-manager
+    - name: metallb
+      namespace: kube-system
+```
+
+Flux ensures dependencies are ready before applying dependent resources.
+
+## Common Patterns
+
+### Multi-Environment Setup
+
+```
+cluster/
+├── base/                 # Base Kustomization
+└── production/          # Production overlay Kustomization
+    └── staging/         # Staging overlay Kustomization
+```
+
+### Namespace Isolation
+
+Each namespace gets its own Kustomization:
+
+```yaml
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: apps-namespace
+  namespace: flux-system
+spec:
+  interval: 10m
+  path: ./apps
+  prune: true
+  targetNamespace: applications
+  sourceRef:
+    kind: GitRepository
+    name: flux-system
+```
+
+## Troubleshooting
+
+### Check Kustomization Status
+
+```bash
+flux get kustomizations
+kubectl describe kustomization flux-system -n flux-system
+```
+
+### View Applied Resources
+
+```bash
+flux tree kustomization flux-system
+```
+
+### Check Events
+
+```bash
+kubectl get events -n flux-system --sort-by='.lastTimestamp'
+```
+
+## Related Resources
+
+- [GitRepository Configuration](/infrastructure/gitops/flux-sources)
+- [HelmReleases Reference](/reference/helm-releases)
+- [Base Overlays](/reference/base-overlays)
+- [Environment Overlays](/reference/environment-overlays)

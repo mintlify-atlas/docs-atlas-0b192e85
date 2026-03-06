@@ -1,0 +1,610 @@
+---
+title: Version Management System
+description: Custom version tracking application with MySQL database backend
+---
+
+## Overview
+
+The Version Management System is a custom application for tracking software versions across multiple projects. It consists of a Node.js frontend application backed by a MySQL database, both deployed in the `version-management` namespace.
+
+## Architecture
+
+The system comprises several components:
+
+<Steps>
+  <Step title="Application Layer">
+    Node.js application serving the web interface on port 3000
+  </Step>
+  
+  <Step title="Database Layer">
+    MySQL 8.0 database with persistent schema initialization
+  </Step>
+  
+  <Step title="Shared Resources">
+    ConfigMaps and Secrets for database configuration
+  </Step>
+  
+  <Step title="Ingress Layer">
+    HTTPRoute for external access via Gateway API
+  </Step>
+</Steps>
+
+## Application Deployment
+
+The version management application is deployed at `overlays/base/version-management/deployment.yaml:1`:
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: version-management-app
+  labels:
+    app: version-management-app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: version-management-app
+  template:
+    metadata:
+      labels:
+        app: version-management-app
+    spec:
+      containers:
+      - name: version-management
+        image: version-management-image-placeholder
+        ports:
+        - containerPort: 3000
+          name: http
+        envFrom:
+        - configMapRef:
+            name: db-config
+        - configMapRef:
+            name: version-management-config
+            optional: true
+        env:
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: db-secrets
+              key: DB_PASSWORD
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+        readinessProbe:
+          httpGet:
+            path: /version-management/api/health
+            port: 3000
+          initialDelaySeconds: 10
+          periodSeconds: 5
+        livenessProbe:
+          httpGet:
+            path: /version-management/api/health
+            port: 3000
+          initialDelaySeconds: 15
+          periodSeconds: 10
+```
+
+<Note>
+The application image is managed via Kustomize image transformation. The actual image is `kimae09/version-management:20250811-193537-rc` as configured in `overlays/kimawesome/applications/version-management/kustomization.yaml:10`.
+</Note>
+
+### Health Checks
+
+The application includes health endpoints:
+
+- **Readiness**: `/version-management/api/health` - Checks if the app is ready to receive traffic
+- **Liveness**: `/version-management/api/health` - Verifies the app is still running
+
+## MySQL Database
+
+### Deployment Configuration
+
+The MySQL database is deployed at `overlays/base/tools/mysql/deployment.yaml:1`:
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mysql
+  labels:
+    app: mysql
+spec:
+  selector:
+    matchLabels:
+      app: mysql
+  template:
+    metadata:
+      labels:
+        app: mysql
+    spec:
+      containers:
+      - name: mysql
+        image: mysql:8.0
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            memory: 512Mi
+        envFrom:
+        - configMapRef:
+            name: db-config
+        env:
+        - name: MYSQL_DATABASE
+          valueFrom:
+            configMapKeyRef:
+              name: db-config
+              key: DB_NAME
+        - name: MYSQL_USER
+          valueFrom:
+            configMapKeyRef:
+              name: db-config
+              key: DB_USER
+        - name: MYSQL_ROOT_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: db-secrets
+              key: DB_PASSWORD
+        - name: MYSQL_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: db-secrets 
+              key: DB_PASSWORD
+        ports:
+        - containerPort: 3306
+          name: mysql
+        volumeMounts:
+        - name: mysql-persistent-storage
+          mountPath: /var/lib/mysql
+        - name: init-db
+          mountPath: /docker-entrypoint-initdb.d
+      volumes:
+      - name: mysql-persistent-storage
+        emptyDir: {}
+      - name: init-db
+        configMap:
+          name: mysql-init-schema
+```
+
+<Warning>
+The MySQL deployment uses `emptyDir` for storage, meaning **data is not persistent** across pod restarts. For production use, replace with a PersistentVolumeClaim.
+</Warning>
+
+### Database Service
+
+The MySQL service at `overlays/base/tools/mysql/service.yaml:1` provides cluster-internal access:
+
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: mysql-service
+spec:
+  ports:
+  - port: 3306
+    targetPort: mysql
+  selector:
+    app: mysql
+  type: ClusterIP
+```
+
+### Schema Initialization
+
+The database schema is initialized via ConfigMap at `overlays/kimawesome/applications/version-management/mysql/kustomization.yaml:4`:
+
+```yaml
+configMapGenerator:
+  - name: mysql-init-schema
+    files:
+      - schema.sql
+```
+
+The `schema.sql` file is automatically executed when the MySQL container starts, creating the necessary tables and initial data.
+
+## Configuration Management
+
+### Database Configuration
+
+Database connection details are stored in a ConfigMap:
+
+```yaml
+# Example db-config ConfigMap
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: db-config
+  namespace: version-management
+data:
+  DB_HOST: mysql-service
+  DB_PORT: "3306"
+  DB_NAME: version_management
+  DB_USER: vmuser
+```
+
+### Database Secrets
+
+Sensitive credentials are managed via Sealed Secrets at `overlays/kimawesome/applications/version-management/shared-resources/db-secret.sealed.yaml:1`.
+
+<Note>
+The cluster uses Sealed Secrets for secure secret management. Never commit unencrypted secrets to Git.
+</Note>
+
+## Accessing the Application
+
+The application is exposed via HTTPRoute on multiple domains:
+
+### Primary Route
+
+At `overlays/kimawesome/applications/version-management/httproute.yaml:1`:
+
+```yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: version-management-route
+spec:
+  parentRefs:
+    - name: https-gateway
+      namespace: kube-system
+      sectionName: https
+  hostnames:
+    - "kim.tplinkdns.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /version-management
+      backendRefs:
+        - name: version-management
+          port: 3000
+```
+
+Access at:
+
+```
+https://kim.tplinkdns.com/version-management
+```
+
+### Alternative Domain
+
+A second HTTPRoute at `overlays/kimawesome/applications/version-management/httproute-kim-tec-br.yaml` provides access via:
+
+```
+https://kim.tec.br/version-management
+```
+
+## Using the Version Management System
+
+<Tabs>
+  <Tab title="Web Interface">
+    Access the web UI to:
+    
+    - View all tracked software versions
+    - Add new version entries
+    - Update existing version records
+    - Search and filter by project or date
+    - Export version reports
+    
+    Navigate to:
+    ```
+    https://kim.tplinkdns.com/version-management
+    ```
+  </Tab>
+  
+  <Tab title="API Access">
+    The application exposes REST API endpoints:
+    
+    ```bash
+    # Health check
+    curl https://kim.tplinkdns.com/version-management/api/health
+    
+    # Get versions (example)
+    curl https://kim.tplinkdns.com/version-management/api/versions
+    
+    # Add version (example)
+    curl -X POST https://kim.tplinkdns.com/version-management/api/versions \
+      -H "Content-Type: application/json" \
+      -d '{"project": "myapp", "version": "1.0.0"}'
+    ```
+  </Tab>
+  
+  <Tab title="Database Direct Access">
+    Connect directly to MySQL from within the cluster:
+    
+    ```bash
+    # Port-forward to MySQL
+    kubectl port-forward -n version-management svc/mysql-service 3306:3306
+    
+    # Connect with mysql client
+    mysql -h 127.0.0.1 -u vmuser -p version_management
+    ```
+    
+    <Warning>
+    Direct database access should be limited to debugging and maintenance. Always use the application API in production.
+    </Warning>
+  </Tab>
+</Tabs>
+
+## Connection Examples
+
+### From Application Code
+
+The application connects to MySQL using environment variables:
+
+```javascript
+// Node.js example
+const mysql = require('mysql2');
+
+const connection = mysql.createConnection({
+  host: process.env.DB_HOST,        // mysql-service
+  port: process.env.DB_PORT,        // 3306
+  user: process.env.DB_USER,        // vmuser
+  password: process.env.DB_PASSWORD, // from sealed secret
+  database: process.env.DB_NAME     // version_management
+});
+```
+
+### From Other Pods
+
+Other applications in the cluster can connect to the database:
+
+```yaml
+# Example pod connecting to MySQL
+apiVersion: v1
+kind: Pod
+metadata:
+  name: db-client
+  namespace: version-management
+spec:
+  containers:
+  - name: mysql-client
+    image: mysql:8.0
+    command: ["sleep", "3600"]
+    env:
+    - name: MYSQL_HOST
+      value: "mysql-service.version-management.svc.cluster.local"
+    - name: MYSQL_PORT
+      value: "3306"
+```
+
+## Updating the Application
+
+<Steps>
+  <Step title="Build New Image">
+    Build and push a new container image:
+    
+    ```bash
+    docker build -t kimae09/version-management:new-tag .
+    docker push kimae09/version-management:new-tag
+    ```
+  </Step>
+  
+  <Step title="Update Kustomization">
+    Edit the image tag in the kustomization:
+    
+    ```yaml
+    # overlays/kimawesome/applications/version-management/kustomization.yaml
+    images:
+      - name: version-management-image-placeholder
+        newName: kimae09/version-management
+        newTag: new-tag
+    ```
+  </Step>
+  
+  <Step title="Commit and Push">
+    ```bash
+    git add overlays/kimawesome/applications/version-management/kustomization.yaml
+    git commit -m "Update version-management to new-tag"
+    git push
+    ```
+  </Step>
+  
+  <Step title="Monitor Deployment">
+    Watch Flux apply the update:
+    
+    ```bash
+    flux reconcile kustomization applications --with-source
+    kubectl rollout status -n version-management deployment/version-management-app
+    ```
+  </Step>
+</Steps>
+
+## Database Schema Updates
+
+To update the database schema:
+
+<Steps>
+  <Step title="Update Schema File">
+    Edit the schema SQL file:
+    
+    ```bash
+    vim overlays/kimawesome/applications/version-management/mysql/schema.sql
+    ```
+  </Step>
+  
+  <Step title="Option A: Init Container (New Deployments)">
+    For new deployments, the schema is automatically applied via the init container.
+  </Step>
+  
+  <Step title="Option B: Manual Migration (Existing DB)">
+    For existing databases, run migrations manually:
+    
+    ```bash
+    # Port-forward to MySQL
+    kubectl port-forward -n version-management svc/mysql-service 3306:3306
+    
+    # Run migration
+    mysql -h 127.0.0.1 -u vmuser -p version_management < schema-update.sql
+    ```
+  </Step>
+  
+  <Step title="Option C: Application Migrations">
+    If your application has migration support (like Knex.js or Sequelize), run migrations through the app:
+    
+    ```bash
+    kubectl exec -it -n version-management deployment/version-management-app -- npm run migrate
+    ```
+  </Step>
+</Steps>
+
+## Backup and Recovery
+
+<Warning>
+Since MySQL uses `emptyDir` storage, data is lost on pod restart. Implement a backup strategy before using in production.
+</Warning>
+
+### Manual Backup
+
+```bash
+# Backup database
+kubectl exec -n version-management deployment/mysql -- \
+  mysqldump -u vmuser -p$DB_PASSWORD version_management > backup.sql
+
+# Store backup in Git or external storage
+git add backups/backup-$(date +%Y%m%d).sql
+git commit -m "Database backup $(date +%Y%m%d)"
+```
+
+### Restore from Backup
+
+```bash
+# Restore database
+kubectl exec -i -n version-management deployment/mysql -- \
+  mysql -u vmuser -p$DB_PASSWORD version_management < backup.sql
+```
+
+### Implement Persistent Storage
+
+For production, replace `emptyDir` with a PersistentVolumeClaim:
+
+```yaml
+volumes:
+- name: mysql-persistent-storage
+  persistentVolumeClaim:
+    claimName: mysql-pvc
+```
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Application can't connect to database">
+    Check database pod status:
+    
+    ```bash
+    kubectl get pods -n version-management -l app=mysql
+    kubectl logs -n version-management -l app=mysql
+    ```
+    
+    Verify service and endpoints:
+    
+    ```bash
+    kubectl get svc -n version-management mysql-service
+    kubectl get endpoints -n version-management mysql-service
+    ```
+    
+    Test connectivity from app pod:
+    
+    ```bash
+    kubectl exec -it -n version-management deployment/version-management-app -- \
+      nc -zv mysql-service 3306
+    ```
+  </Accordion>
+  
+  <Accordion title="Database schema not initialized">
+    Check if the init script was mounted:
+    
+    ```bash
+    kubectl exec -n version-management deployment/mysql -- \
+      ls -la /docker-entrypoint-initdb.d/
+    ```
+    
+    View init logs:
+    
+    ```bash
+    kubectl logs -n version-management -l app=mysql | grep -i "init"
+    ```
+    
+    Manually run schema if needed:
+    
+    ```bash
+    kubectl exec -i -n version-management deployment/mysql -- \
+      mysql -u root -p$MYSQL_ROOT_PASSWORD version_management < schema.sql
+    ```
+  </Accordion>
+  
+  <Accordion title="Application returning 5xx errors">
+    Check application logs:
+    
+    ```bash
+    kubectl logs -n version-management deployment/version-management-app --tail=50
+    ```
+    
+    Verify environment variables:
+    
+    ```bash
+    kubectl exec -n version-management deployment/version-management-app -- env | grep DB_
+    ```
+    
+    Check health endpoint:
+    
+    ```bash
+    kubectl exec -n version-management deployment/version-management-app -- \
+      curl -v http://localhost:3000/version-management/api/health
+    ```
+  </Accordion>
+  
+  <Accordion title="Data lost after pod restart">
+    This is expected with `emptyDir` volumes. To preserve data:
+    
+    1. Implement regular backups (see Backup section)
+    2. Switch to PersistentVolume for production
+    3. Consider external database (RDS, Cloud SQL, etc.)
+  </Accordion>
+</AccordionGroup>
+
+## Resource Usage
+
+The version management system is configured with the following resources:
+
+| Component | CPU Request | Memory Request | CPU Limit | Memory Limit |
+|-----------|-------------|----------------|-----------|-------------|
+| Application | 100m | 128Mi | 200m | 256Mi |
+| MySQL | 100m | 128Mi | - | 512Mi |
+
+<Note>
+Monitor actual resource usage and adjust limits based on your workload. Use `kubectl top pods -n version-management` to view current usage.
+</Note>
+
+## Security Considerations
+
+<CardGroup cols={2}>
+  <Card title="Sealed Secrets" icon="lock">
+    Database passwords are encrypted with Sealed Secrets and never committed in plain text
+  </Card>
+  
+  <Card title="Network Policies" icon="shield">
+    Consider implementing NetworkPolicies to restrict database access to authorized pods only
+  </Card>
+  
+  <Card title="HTTPS Only" icon="lock">
+    Application is only accessible via HTTPS through the Gateway
+  </Card>
+  
+  <Card title="No Root Access" icon="user-slash">
+    Application runs with non-root user credentials for database access
+  </Card>
+</CardGroup>
+
+## Future Enhancements
+
+- Implement PersistentVolume for MySQL data
+- Add automated backup to external storage
+- Set up database replication for high availability
+- Implement connection pooling
+- Add metrics and monitoring (Prometheus/Grafana)
+- Create read replicas for reporting queries

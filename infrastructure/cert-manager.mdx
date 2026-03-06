@@ -1,0 +1,428 @@
+---
+title: "Certificate Management with cert-manager"
+description: "Automate TLS certificate provisioning and management with cert-manager and Let's Encrypt"
+---
+
+## Overview
+
+cert-manager automates the management and issuance of TLS certificates in Kubernetes. It integrates with Let's Encrypt and other certificate authorities to automatically provision, renew, and manage certificates for your applications.
+
+## HelmRelease Configuration
+
+cert-manager is deployed using Flux with Gateway API support enabled:
+
+```yaml helm-release.yaml
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: cert-manager
+  namespace: flux-system
+spec:
+  chart:
+    spec:
+      chart: cert-manager
+      reconcileStrategy: ChartVersion
+      sourceRef:
+        kind: HelmRepository
+        name: cert-manager
+        namespace: cert-manager
+      version: 1.18.2
+  interval: 1m0s
+  releaseName: cert-manager
+  targetNamespace: cert-manager
+  install:
+    crds: Create
+  upgrade:
+    crds: CreateReplace
+  values:
+    config:
+      apiVersion: controller.config.cert-manager.io/v1alpha1
+      kind: ControllerConfiguration
+      enableGatewayAPI: true
+    crds:
+      enabled: true
+```
+
+### Configuration Parameters
+
+<ParamField path="spec.chart.spec.version" type="string" required>
+  cert-manager Helm chart version. Currently using `1.18.2`
+</ParamField>
+
+<ParamField path="spec.values.config.enableGatewayAPI" type="boolean" default="true">
+  Enable Gateway API support for HTTP-01 challenges
+</ParamField>
+
+<ParamField path="spec.install.crds" type="string" default="Create">
+  Automatically install cert-manager CRDs
+</ParamField>
+
+<ParamField path="spec.targetNamespace" type="string" default="cert-manager">
+  Namespace where cert-manager will be installed
+</ParamField>
+
+## ClusterIssuer Configuration
+
+A ClusterIssuer defines how cert-manager will request certificates. Here's the Let's Encrypt production issuer:
+
+```yaml cluster-issuer.yaml
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: cluster-issuer
+spec:
+  acme:
+    email: kim.ae09@gmail.com
+    server: https://acme-v02.api.letsencrypt.org/directory
+    privateKeySecretRef:
+      name: issuer-account-key
+    solvers:
+    - http01:
+        gatewayHTTPRoute:
+          parentRefs:
+            - name: http-gateway
+              namespace: kube-system
+              kind: Gateway
+              sectionName: http
+```
+
+### Issuer Types
+
+<Tabs>
+  <Tab title="ClusterIssuer">
+    ClusterIssuer is cluster-scoped and can issue certificates for any namespace:
+
+    ```yaml
+    apiVersion: cert-manager.io/v1
+    kind: ClusterIssuer
+    metadata:
+      name: letsencrypt-prod
+    spec:
+      acme:
+        server: https://acme-v02.api.letsencrypt.org/directory
+        email: admin@example.com
+        privateKeySecretRef:
+          name: letsencrypt-prod-key
+        solvers:
+        - http01:
+            ingress:
+              class: nginx
+    ```
+
+    **Use case:** Centralized certificate management for the entire cluster
+  </Tab>
+
+  <Tab title="Issuer">
+    Issuer is namespace-scoped and can only issue certificates in its namespace:
+
+    ```yaml
+    apiVersion: cert-manager.io/v1
+    kind: Issuer
+    metadata:
+      name: letsencrypt-prod
+      namespace: my-app
+    spec:
+      acme:
+        server: https://acme-v02.api.letsencrypt.org/directory
+        email: admin@example.com
+        privateKeySecretRef:
+          name: letsencrypt-prod-key
+        solvers:
+        - http01:
+            ingress:
+              class: nginx
+    ```
+
+    **Use case:** Isolated certificate management per namespace
+  </Tab>
+</Tabs>
+
+<Note>
+  The cluster uses Gateway API HTTP-01 challenges instead of Ingress-based challenges for ACME validation.
+</Note>
+
+## Certificate Management
+
+### Automatic Certificate with Gateway
+
+The easiest way to get a certificate is using Gateway annotations:
+
+```yaml https-gateway.yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: https-gateway
+  annotations:
+    cert-manager.io/cluster-issuer: cluster-issuer
+spec:
+  gatewayClassName: kgateway
+  listeners:
+    - name: https
+      protocol: HTTPS
+      port: 443
+      hostname: app.example.com
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - name: app-example-com-tls
+```
+
+<Steps>
+  <Step title="Add annotation">
+    Add the `cert-manager.io/cluster-issuer` annotation to your Gateway
+  </Step>
+
+  <Step title="Define TLS listener">
+    Configure the HTTPS listener with hostname and certificate reference
+  </Step>
+
+  <Step title="Automatic certificate">
+    cert-manager automatically creates and manages the certificate
+  </Step>
+</Steps>
+
+### Manual Certificate Resource
+
+For more control, create a Certificate resource directly:
+
+```yaml certificate.yaml
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: app-tls
+  namespace: default
+spec:
+  secretName: app-example-com-tls
+  issuerRef:
+    name: cluster-issuer
+    kind: ClusterIssuer
+  dnsNames:
+    - app.example.com
+    - www.app.example.com
+  duration: 2160h  # 90 days
+  renewBefore: 720h  # 30 days before expiry
+```
+
+#### Certificate Parameters
+
+<ParamField path="spec.secretName" type="string" required>
+  Name of the Secret where the certificate will be stored
+</ParamField>
+
+<ParamField path="spec.issuerRef" type="object" required>
+  Reference to the Issuer or ClusterIssuer
+</ParamField>
+
+<ParamField path="spec.dnsNames" type="array" required>
+  List of DNS names (SANs) for the certificate
+</ParamField>
+
+<ParamField path="spec.duration" type="string" default="2160h">
+  Requested certificate lifetime (90 days)
+</ParamField>
+
+<ParamField path="spec.renewBefore" type="string" default="720h">
+  When to renew the certificate before expiry (30 days)
+</ParamField>
+
+## Challenge Types
+
+<Tabs>
+  <Tab title="HTTP-01 Challenge">
+    HTTP-01 challenges validate domain ownership by serving a file over HTTP:
+
+    ```yaml
+    solvers:
+    - http01:
+        gatewayHTTPRoute:
+          parentRefs:
+            - name: http-gateway
+              namespace: kube-system
+              kind: Gateway
+              sectionName: http
+    ```
+
+    **Advantages:**
+    - Simple to configure
+    - Works with Gateway API or Ingress
+    - No DNS provider integration needed
+
+    **Requirements:**
+    - Domain must be publicly accessible on port 80
+    - Gateway/Ingress must route to cert-manager's challenge solver
+  </Tab>
+
+  <Tab title="DNS-01 Challenge">
+    DNS-01 challenges validate domain ownership via DNS TXT records:
+
+    ```yaml
+    solvers:
+    - dns01:
+        cloudflare:
+          email: admin@example.com
+          apiTokenSecretRef:
+            name: cloudflare-api-token
+            key: api-token
+    ```
+
+    **Advantages:**
+    - Works for wildcard certificates
+    - No need for public HTTP access
+    - Can validate internal domains
+
+    **Requirements:**
+    - DNS provider API access
+    - Credentials stored in Kubernetes Secret
+  </Tab>
+</Tabs>
+
+## Wildcard Certificates
+
+For wildcard certificates, use DNS-01 challenge:
+
+```yaml wildcard-certificate.yaml
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: wildcard-example-com
+  namespace: default
+spec:
+  secretName: wildcard-example-com-tls
+  issuerRef:
+    name: letsencrypt-dns
+    kind: ClusterIssuer
+  dnsNames:
+    - "*.example.com"
+    - example.com
+```
+
+<Warning>
+  HTTP-01 challenges cannot be used for wildcard certificates. You must use DNS-01 challenges.
+</Warning>
+
+## Verifying Certificate Status
+
+### Check certificate status
+
+```bash
+kubectl get certificates -A
+```
+
+Expected output:
+```
+NAMESPACE   NAME              READY   SECRET                AGE
+default     app-tls           True    app-example-com-tls   5d
+default     api-tls           True    api-example-com-tls   5d
+```
+
+### View certificate details
+
+```bash
+kubectl describe certificate app-tls
+```
+
+### Check certificate secret
+
+```bash
+kubectl get secret app-example-com-tls -o yaml
+```
+
+### Inspect certificate content
+
+```bash
+kubectl get secret app-example-com-tls -o jsonpath='{.data.tls\.crt}' | base64 -d | openssl x509 -text -noout
+```
+
+## Troubleshooting
+
+### Certificate stuck in pending
+
+<Steps>
+  <Step title="Check certificate status">
+    ```bash
+    kubectl describe certificate app-tls
+    ```
+    Look for error messages in the Events section
+  </Step>
+
+  <Step title="Check CertificateRequest">
+    ```bash
+    kubectl get certificaterequest
+    kubectl describe certificaterequest <name>
+    ```
+  </Step>
+
+  <Step title="Check Order and Challenge">
+    ```bash
+    kubectl get orders
+    kubectl get challenges
+    kubectl describe challenge <name>
+    ```
+  </Step>
+
+  <Step title="View cert-manager logs">
+    ```bash
+    kubectl logs -n cert-manager -l app.kubernetes.io/name=cert-manager
+    ```
+  </Step>
+</Steps>
+
+### HTTP-01 challenge failing
+
+1. Verify Gateway is configured correctly:
+   ```bash
+   kubectl get gateway http-gateway -n kube-system
+   ```
+
+2. Check that port 80 is accessible:
+   ```bash
+   curl -I http://app.example.com/.well-known/acme-challenge/test
+   ```
+
+3. Verify HTTP-01 solver pod is running:
+   ```bash
+   kubectl get pods -l acme.cert-manager.io/http01-solver=true
+   ```
+
+## Staging Environment
+
+For testing, use Let's Encrypt staging environment:
+
+```yaml staging-issuer.yaml
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-staging
+spec:
+  acme:
+    server: https://acme-staging-v02.api.letsencrypt.org/directory
+    email: admin@example.com
+    privateKeySecretRef:
+      name: letsencrypt-staging-key
+    solvers:
+    - http01:
+        gatewayHTTPRoute:
+          parentRefs:
+            - name: http-gateway
+              namespace: kube-system
+```
+
+<Tip>
+  Always test with the staging environment first to avoid hitting Let's Encrypt rate limits (5 certificates per domain per week in production).
+</Tip>
+
+## Best Practices
+
+- Use ClusterIssuer for cluster-wide certificate management
+- Enable Gateway API support in cert-manager configuration
+- Set appropriate `renewBefore` duration (30 days recommended)
+- Use staging issuer for testing new configurations
+- Monitor certificate expiry dates
+- Store ACME account keys securely
+- Use DNS-01 challenges for wildcard certificates
+
+## Resources
+
+- [cert-manager Documentation](https://cert-manager.io/docs/)
+- [Gateway API Integration](https://cert-manager.io/docs/usage/gateway/)
+- [Let's Encrypt Rate Limits](https://letsencrypt.org/docs/rate-limits/)

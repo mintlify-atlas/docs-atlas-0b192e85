@@ -1,0 +1,571 @@
+---
+title: 'Gateway API with kgateway'
+description: 'Configure Kubernetes Gateway API for advanced traffic routing and ingress management'
+---
+
+## Overview
+
+The Kubernetes Gateway API provides a more expressive and extensible way to manage ingress traffic compared to traditional Ingress resources. The cluster uses kgateway as the Gateway API implementation.
+
+## Key Concepts
+
+- **GatewayClass**: Defines the controller that implements the Gateway API
+- **Gateway**: Represents a load balancer with listeners for different protocols
+- **HTTPRoute**: Routes HTTP traffic to services based on host, path, headers, etc.
+- **TLSRoute**: Routes TLS traffic
+- **TCPRoute**: Routes TCP traffic
+
+## HelmRelease Configuration
+
+kgateway is deployed using Flux with two HelmReleases:
+
+### CRD Installation
+
+```yaml crd-helm-release.yaml
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: kgateway-crds
+spec:
+  interval: 10m
+  chart:
+    spec:
+      chart: kgateway-crds
+      sourceRef:
+        kind: HelmRepository
+        name: kgateway
+      interval: 5m
+      version: "v2.1.2"
+  install:
+    crds: CreateReplace
+  upgrade:
+    crds: CreateReplace
+```
+
+### Controller Installation
+
+```yaml helm-release.yaml
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: kgateway
+spec:
+  interval: 10m
+  chart:
+    spec:
+      chart: kgateway
+      sourceRef:
+        kind: HelmRepository
+        name: kgateway
+      interval: 5m
+      version: "v2.1.2"
+  dependsOn:
+    - name: kgateway-crds
+```
+
+### Configuration Parameters
+
+<ParamField path="spec.chart.spec.version" type="string" required>
+  kgateway version. Currently using `v2.1.2`
+</ParamField>
+
+<ParamField path="spec.interval" type="string" default="10m">
+  How often Flux reconciles the HelmRelease
+</ParamField>
+
+<ParamField path="spec.dependsOn" type="array">
+  Ensures CRDs are installed before the controller
+</ParamField>
+
+<Note>
+  The kgateway HelmRelease depends on kgateway-crds to ensure CRDs are installed first.
+</Note>
+
+## GatewayClass
+
+Define a GatewayClass to specify kgateway as the controller:
+
+```yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: kgateway
+spec:
+  controllerName: kgateway.io/gateway-controller
+```
+
+## Gateway Configuration
+
+A Gateway defines listeners for different protocols and ports:
+
+<Tabs>
+  <Tab title="HTTP Gateway">
+    Basic HTTP gateway for port 80:
+
+    ```yaml http-gateway.yaml
+    apiVersion: gateway.networking.k8s.io/v1
+    kind: Gateway
+    metadata:
+      name: http-gateway
+      namespace: kube-system
+    spec:
+      gatewayClassName: kgateway
+      listeners:
+        - name: http
+          protocol: HTTP
+          port: 80
+          allowedRoutes:
+            namespaces:
+              from: All
+    ```
+  </Tab>
+
+  <Tab title="HTTPS Gateway">
+    HTTPS gateway with TLS termination and cert-manager integration:
+
+    ```yaml https-gateway.yaml
+    apiVersion: gateway.networking.k8s.io/v1
+    kind: Gateway
+    metadata:
+      name: https-gateway
+      namespace: kube-system
+      annotations:
+        cert-manager.io/cluster-issuer: cluster-issuer
+    spec:
+      gatewayClassName: kgateway
+      listeners:
+        - name: https
+          protocol: HTTPS
+          port: 443
+          hostname: app.example.com
+          allowedRoutes:
+            namespaces:
+              from: All
+          tls:
+            mode: Terminate
+            certificateRefs:
+              - name: app-example-com-tls
+    ```
+
+    <Note>
+      The `cert-manager.io/cluster-issuer` annotation automatically provisions TLS certificates.
+    </Note>
+  </Tab>
+
+  <Tab title="Multi-Host HTTPS Gateway">
+    Gateway with multiple HTTPS listeners for different hostnames:
+
+    ```yaml multi-https-gateway.yaml
+    apiVersion: gateway.networking.k8s.io/v1
+    kind: Gateway
+    metadata:
+      name: https-gateway
+      annotations:
+        cert-manager.io/cluster-issuer: cluster-issuer
+    spec:
+      gatewayClassName: kgateway
+      listeners:
+        - name: https-app1
+          protocol: HTTPS
+          port: 443
+          hostname: app1.example.com
+          allowedRoutes:
+            namespaces:
+              from: All
+          tls:
+            mode: Terminate
+            certificateRefs:
+              - name: app1-example-com-tls
+        - name: https-app2
+          protocol: HTTPS
+          port: 443
+          hostname: app2.example.com
+          allowedRoutes:
+            namespaces:
+              from: All
+          tls:
+            mode: Terminate
+            certificateRefs:
+              - name: app2-example-com-tls
+    ```
+  </Tab>
+</Tabs>
+
+## HTTPRoute Configuration
+
+HTTPRoute resources define how HTTP traffic is routed to backend services:
+
+### Basic HTTPRoute
+
+```yaml httproute.yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: my-app-route
+  namespace: production
+spec:
+  parentRefs:
+    - name: https-gateway
+      namespace: kube-system
+      sectionName: https-app1
+  hostnames:
+    - app1.example.com
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: my-app-service
+          port: 8080
+```
+
+### Path-Based Routing
+
+Route different paths to different services:
+
+```yaml path-routing.yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: api-route
+  namespace: production
+spec:
+  parentRefs:
+    - name: https-gateway
+      namespace: kube-system
+  hostnames:
+    - api.example.com
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /v1
+      backendRefs:
+        - name: api-v1-service
+          port: 8080
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /v2
+      backendRefs:
+        - name: api-v2-service
+          port: 8080
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: api-default-service
+          port: 8080
+```
+
+### Header-Based Routing
+
+Route based on HTTP headers:
+
+```yaml header-routing.yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: canary-route
+spec:
+  parentRefs:
+    - name: https-gateway
+  rules:
+    - matches:
+        - headers:
+            - name: X-Canary
+              value: "true"
+      backendRefs:
+        - name: app-canary
+          port: 8080
+    - backendRefs:
+        - name: app-stable
+          port: 8080
+```
+
+### Traffic Splitting (Canary Deployments)
+
+Split traffic between multiple backend versions:
+
+```yaml traffic-split.yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: weighted-route
+spec:
+  parentRefs:
+    - name: https-gateway
+  rules:
+    - backendRefs:
+        - name: app-v1
+          port: 8080
+          weight: 90
+        - name: app-v2
+          port: 8080
+          weight: 10
+```
+
+<Tip>
+  Start with low weights (e.g., 5-10%) for new versions, then gradually increase as confidence grows.
+</Tip>
+
+## Real-World Example
+
+Here's a complete example from the cluster configuration:
+
+```yaml https-gateway.yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: https-gateway
+  namespace: kube-system
+  annotations:
+    cert-manager.io/cluster-issuer: cluster-issuer
+spec:
+  gatewayClassName: kgateway
+  listeners:
+    - name: https
+      protocol: HTTPS
+      port: 443
+      hostname: kim.tplinkdns.com
+      allowedRoutes:
+        namespaces:
+          from: All
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - name: kim-iplinkdns-tls
+    - name: https-vm
+      protocol: HTTPS
+      port: 443
+      hostname: version-management.kim.tec.br
+      allowedRoutes:
+        namespaces:
+          from: All
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - name: version-management-kim-tec-br-tls
+    - name: https-grafana
+      protocol: HTTPS
+      port: 443
+      hostname: grafana.kim.tec.br
+      allowedRoutes:
+        namespaces:
+          from: All
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - name: grafana-kim-tec-br-tls
+```
+
+## Advanced Features
+
+### Request Redirect
+
+Redirect HTTP to HTTPS:
+
+```yaml redirect.yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: http-to-https-redirect
+spec:
+  parentRefs:
+    - name: http-gateway
+      namespace: kube-system
+  rules:
+    - filters:
+        - type: RequestRedirect
+          requestRedirect:
+            scheme: https
+            statusCode: 301
+```
+
+### URL Rewriting
+
+Rewrite request paths:
+
+```yaml rewrite.yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: path-rewrite
+spec:
+  parentRefs:
+    - name: https-gateway
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /api/v1
+      filters:
+        - type: URLRewrite
+          urlRewrite:
+            path:
+              type: ReplacePrefixMatch
+              replacePrefixMatch: /v1
+      backendRefs:
+        - name: api-service
+          port: 8080
+```
+
+### Cross-Namespace Routing
+
+Allow HTTPRoutes to reference Gateways in different namespaces:
+
+```yaml cross-namespace.yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: app-route
+  namespace: my-app
+spec:
+  parentRefs:
+    - name: https-gateway
+      namespace: kube-system  # Gateway in different namespace
+  rules:
+    - backendRefs:
+        - name: app-service
+          port: 8080
+```
+
+<Warning>
+  The Gateway must have `allowedRoutes.namespaces.from: All` or explicitly allow the HTTPRoute's namespace.
+</Warning>
+
+## Verifying Gateway API
+
+### Check Gateway status
+
+```bash
+kubectl get gateways -A
+```
+
+Expected output:
+```
+NAMESPACE     NAME            CLASS      ADDRESS         READY
+kube-system   http-gateway    kgateway   192.168.10.10   True
+kube-system   https-gateway   kgateway   192.168.10.11   True
+```
+
+### Check HTTPRoutes
+
+```bash
+kubectl get httproutes -A
+```
+
+### View Gateway details
+
+```bash
+kubectl describe gateway https-gateway -n kube-system
+```
+
+### Check kgateway pods
+
+```bash
+kubectl get pods -n kube-system -l app.kubernetes.io/name=kgateway
+```
+
+## Troubleshooting
+
+### Gateway not getting an address
+
+<Steps>
+  <Step title="Check MetalLB configuration">
+    ```bash
+    kubectl get ipaddresspools -n metallb-system
+    ```
+    Ensure there are available IPs in the pool
+  </Step>
+
+  <Step title="Check Gateway events">
+    ```bash
+    kubectl describe gateway https-gateway -n kube-system
+    ```
+    Look for error events
+  </Step>
+
+  <Step title="Verify GatewayClass">
+    ```bash
+    kubectl get gatewayclass
+    ```
+    Should show kgateway as accepted
+  </Step>
+</Steps>
+
+### HTTPRoute not working
+
+1. Verify Gateway is ready:
+   ```bash
+   kubectl get gateway https-gateway -n kube-system
+   ```
+
+2. Check HTTPRoute status:
+   ```bash
+   kubectl describe httproute my-app-route -n production
+   ```
+
+3. Verify backend service exists:
+   ```bash
+   kubectl get svc my-app-service -n production
+   ```
+
+4. Check kgateway logs:
+   ```bash
+   kubectl logs -n kube-system -l app.kubernetes.io/name=kgateway
+   ```
+
+### TLS certificate issues
+
+1. Check if certificate is ready:
+   ```bash
+   kubectl get certificate app-example-com-tls
+   ```
+
+2. Verify cert-manager created the certificate:
+   ```bash
+   kubectl describe certificate app-example-com-tls
+   ```
+
+3. Check certificate secret exists:
+   ```bash
+   kubectl get secret app-example-com-tls
+   ```
+
+## Best Practices
+
+<Tip>
+  - Use separate Gateways for HTTP (port 80) and HTTPS (port 443)
+  - Enable cross-namespace routing with `allowedRoutes` for flexibility
+  - Use cert-manager annotations for automatic TLS certificate management
+  - Organize HTTPRoutes by application or service in their respective namespaces
+  - Use weighted traffic splitting for canary deployments
+  - Implement HTTP to HTTPS redirects for security
+  - Monitor Gateway and HTTPRoute status regularly
+  - Use descriptive names for listeners in multi-host Gateways
+</Tip>
+
+## Gateway API vs Ingress
+
+| Feature | Gateway API | Ingress |
+|---------|-------------|----------|
+| **Expressiveness** | High - rich routing rules | Limited |
+| **Protocol support** | HTTP, HTTPS, TCP, UDP, TLS | HTTP, HTTPS only |
+| **Traffic splitting** | Native support | Requires extensions |
+| **Multi-tenant** | Role-based separation | Limited |
+| **Extensibility** | Plugin architecture | Annotation-based |
+| **Maturity** | Newer (2023+) | Mature (2016+) |
+
+<Note>
+  Gateway API is the successor to Ingress and provides more flexibility and features. Consider migrating from Ingress to Gateway API for new projects.
+</Note>
+
+## Resources
+
+- [Kubernetes Gateway API Documentation](https://gateway-api.sigs.k8s.io/)
+- [Gateway API Concepts](https://gateway-api.sigs.k8s.io/concepts/api-overview/)
+- [kgateway Documentation](https://docs.solo.io/kgateway/)
+- [HTTPRoute Reference](https://gateway-api.sigs.k8s.io/reference/spec/#gateway.networking.k8s.io/v1.HTTPRoute)

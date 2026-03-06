@@ -1,0 +1,337 @@
+---
+title: Base Overlays
+description: Reference for base overlay configurations that provide reusable component definitions
+---
+
+Base overlays provide the foundation configurations for all components in the cluster. They define default settings that can be customized by environment-specific overlays.
+
+## Directory Structure
+
+The base overlays are located in `overlays/base/` and organized by component:
+
+```
+overlays/base/
+├── bind9/                    # DNS server
+├── cert-manager/             # TLS certificate management
+├── grafana/                  # Observability stack
+│   ├── grafana-alloy/       # Telemetry collection
+│   ├── grafana-loki/        # Log aggregation
+│   └── grafana-operator/    # Grafana instance management
+├── kgateway/                 # Kubernetes Gateway API
+├── knowledge-hub/            # Knowledge base application
+├── metallb/                  # Load balancer
+├── metrics-server/           # Resource metrics
+├── n8n/                      # Workflow automation
+├── prometheus/               # Monitoring stack
+├── sealed-secrets/           # Secret encryption
+├── tailscale/                # VPN operator
+├── tools/                    # Utility applications
+│   ├── http-echo/
+│   ├── mysql/
+│   └── no/
+├── version-management/       # Version tracking application
+└── yopass/                   # Secret sharing
+```
+
+## Base Overlay Anatomy
+
+Each base overlay typically contains:
+
+1. **kustomization.yaml** - Defines resources to include
+2. **namespace.yaml** - Namespace definition (if needed)
+3. **helm-repository.yaml** - Helm chart repository (for Helm-based apps)
+4. **helm-release.yaml** or **helmrelease.yaml** - HelmRelease definition
+5. **deployment.yaml** - Deployment manifest (for non-Helm apps)
+6. **service.yaml** - Service definition (for non-Helm apps)
+
+## Example: cert-manager Base
+
+<Tabs>
+  <Tab title="kustomization.yaml">
+    ```yaml overlays/base/cert-manager/kustomization.yaml
+    resources:
+      - namespace.yaml
+      - helm-repository.yaml
+      - helm-release.yaml
+    ```
+  </Tab>
+  <Tab title="namespace.yaml">
+    ```yaml overlays/base/cert-manager/namespace.yaml
+    apiVersion: v1
+    kind: Namespace
+    metadata:
+      name: cert-manager
+    ```
+  </Tab>
+  <Tab title="helm-repository.yaml">
+    ```yaml overlays/base/cert-manager/helm-repository.yaml
+    apiVersion: source.toolkit.fluxcd.io/v1
+    kind: HelmRepository
+    metadata:
+      name: cert-manager
+      namespace: cert-manager
+    spec:
+      interval: 24h
+      url: https://charts.jetstack.io
+    ```
+  </Tab>
+  <Tab title="helm-release.yaml">
+    ```yaml overlays/base/cert-manager/helm-release.yaml
+    apiVersion: helm.toolkit.fluxcd.io/v2
+    kind: HelmRelease
+    metadata:
+      name: cert-manager
+      namespace: flux-system
+    spec:
+      chart:
+        spec:
+          chart: cert-manager
+          version: 1.18.2
+          sourceRef:
+            kind: HelmRepository
+            name: cert-manager
+            namespace: cert-manager
+      interval: 1m0s
+      targetNamespace: cert-manager
+      install:
+        crds: Create
+      upgrade:
+        crds: CreateReplace
+    ```
+  </Tab>
+</Tabs>
+
+## Infrastructure Components
+
+### Helm-Based Components
+
+These components use Helm charts and include HelmRepository + HelmRelease:
+
+<CardGroup cols={2}>
+  <Card title="cert-manager" icon="shield-check">
+    TLS certificate management with Let's Encrypt integration
+  </Card>
+  <Card title="grafana-operator" icon="chart-line">
+    Manages Grafana instances using Kubernetes operators
+  </Card>
+  <Card title="grafana-loki" icon="database">
+    Log aggregation and storage system
+  </Card>
+  <Card title="grafana-alloy" icon="satellite-dish">
+    Collects and forwards telemetry data
+  </Card>
+  <Card title="metallb" icon="network-wired">
+    Provides LoadBalancer services for bare-metal clusters
+  </Card>
+  <Card title="kgateway" icon="route">
+    Kubernetes Gateway API implementation
+  </Card>
+  <Card title="metrics-server" icon="gauge">
+    Provides resource metrics API for HPA and kubectl top
+  </Card>
+  <Card title="prometheus" icon="chart-area">
+    Complete monitoring stack with Alertmanager
+  </Card>
+  <Card title="sealed-secrets" icon="lock">
+    Encrypts secrets for safe storage in Git
+  </Card>
+  <Card title="tailscale" icon="shield">
+    VPN operator for secure networking
+  </Card>
+  <Card title="n8n" icon="workflow">
+    Workflow automation and integration platform
+  </Card>
+</CardGroup>
+
+### Kubernetes Manifest Components
+
+These components use plain Kubernetes manifests:
+
+<CardGroup cols={2}>
+  <Card title="bind9" icon="server">
+    DNS server deployment with ConfigMap-based configuration
+  </Card>
+  <Card title="knowledge-hub" icon="book">
+    Knowledge base application with Deployment + Service
+  </Card>
+  <Card title="version-management" icon="code-branch">
+    Application version tracking system
+  </Card>
+  <Card title="yopass" icon="key">
+    Secure secret sharing with time-limited access
+  </Card>
+</CardGroup>
+
+## Kustomization.yaml Structure
+
+Base kustomization files define which resources to include:
+
+### Simple Example
+
+```yaml
+resources:
+  - namespace.yaml
+  - helm-repository.yaml
+  - helm-release.yaml
+```
+
+### With Multiple Components
+
+```yaml overlays/kimawesome/infrastructure/observability/kustomization.yaml
+namespace: observability
+resources:
+  - namespace.yaml
+  - grafana-alloy
+  - prometheus
+  - ../../../base/grafana/helm-repository.yaml
+  - grafana-operator
+  - monitors-infrastructure/kustomization.flux.yaml
+  - grafana-loki
+```
+
+### With Namespace Transformation
+
+```yaml
+namespace: my-namespace
+resources:
+  - ../../../base/cert-manager
+```
+
+All resources from the base will be created in `my-namespace` unless they explicitly specify a namespace.
+
+## Using Base Overlays
+
+Environment overlays reference base overlays in their kustomization:
+
+<CodeGroup>
+```yaml Direct Reference
+# overlays/kimawesome/infrastructure/cert-manager/kustomization.yaml
+namespace: cert-manager
+resources:
+  - ../../../base/cert-manager
+```
+
+```yaml With Patches
+# overlays/kimawesome/infrastructure/metrics-server/kustomization.yaml
+namespace: kube-system
+resources:
+  - ../../../base/metrics-server
+patchesStrategicMerge:
+  - helm-release.patch.yaml
+```
+
+```yaml Multiple Bases
+# overlays/kimawesome/infrastructure/observability/kustomization.yaml
+namespace: observability
+resources:
+  - ../../../base/prometheus
+  - ../../../base/grafana/grafana-operator
+  - ../../../base/grafana/grafana-loki
+  - ../../../base/grafana/grafana-alloy
+```
+</CodeGroup>
+
+## Customization Patterns
+
+### Shared Helm Repository
+
+Multiple components can share a HelmRepository:
+
+```yaml
+# overlays/base/grafana/helm-repository.yaml
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: HelmRepository
+metadata:
+  name: grafana
+  namespace: flux-system
+spec:
+  interval: 24h
+  url: https://grafana.github.io/helm-charts
+```
+
+Referenced by multiple HelmReleases:
+- grafana-operator
+- grafana-loki  
+- grafana-alloy
+
+### Minimal Configuration
+
+Base overlays provide minimal, production-ready defaults. Environment overlays add specific configuration:
+
+**Base (minimal):**
+```yaml
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: metallb
+spec:
+  chart:
+    spec:
+      chart: metallb
+      version: "=0.15.3"
+  interval: 24h
+```
+
+**Environment (adds IPPool):**
+```yaml
+apiVersion: metallb.io/v1beta1
+kind: IPAddressPool
+metadata:
+  name: default-pool
+  namespace: metallb-system
+spec:
+  addresses:
+    - 192.168.1.100-192.168.1.110
+```
+
+## Benefits of Base Overlays
+
+<Accordion title="Reusability">
+  Define each component once, reuse across all environments. Changes to base configurations automatically propagate.
+</Accordion>
+
+<Accordion title="Consistency">
+  All environments start with the same base configuration, ensuring consistency across dev, staging, and production.
+</Accordion>
+
+<Accordion title="Separation of Concerns">
+  Base overlays contain application definitions. Environment overlays contain environment-specific configuration.
+</Accordion>
+
+<Accordion title="Easy Updates">
+  Update chart versions or configurations in one place. All environments benefit from the update.
+</Accordion>
+
+<Accordion title="Testability">
+  Base configurations can be tested independently before applying to production environments.
+</Accordion>
+
+## Best Practices
+
+1. **Keep bases minimal** - Only include essential configuration
+2. **Use semantic versioning** - Pin exact chart versions in bases
+3. **Document dependencies** - Use comments to explain why specific settings exist
+4. **Avoid environment-specific values** - Move those to environment overlays
+5. **Group related components** - Use subdirectories for component families (e.g., grafana/)
+6. **Include all required resources** - Namespace, HelmRepository, and HelmRelease
+
+## Viewing Base Configurations
+
+To see what a base overlay will deploy:
+
+```bash
+kubectl kustomize overlays/base/cert-manager/
+kubectl kustomize overlays/base/prometheus/
+```
+
+To see how an environment uses a base:
+
+```bash
+kubectl kustomize overlays/kimawesome/infrastructure/cert-manager/
+```
+
+## Related Resources
+
+- [Environment Overlays](/reference/environment-overlays)
+- [Flux Kustomizations](/reference/flux-kustomizations)
+- [HelmReleases Reference](/reference/helm-releases)

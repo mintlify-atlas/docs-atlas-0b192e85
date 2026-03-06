@@ -1,0 +1,160 @@
+---
+title: Prerequisites
+description: System requirements and prerequisites for installing Kimbernetes K8s Flux cluster
+---
+
+Before installing the Kubernetes cluster with Flux, ensure your system meets all prerequisites and has the necessary configurations in place.
+
+## System Requirements
+
+<Note>
+This guide is designed for bare-metal Kubernetes clusters running on Linux systems.
+</Note>
+
+### Hardware Requirements
+
+- **Control Plane Nodes**: Minimum 2 CPU cores, 2GB RAM
+- **Worker Nodes**: Minimum 2 CPU cores, 2GB RAM (varies by workload)
+- **Storage**: At least 20GB free disk space per node
+- **Network**: Static IP addresses for control plane nodes (e.g., 192.168.0.101)
+
+### Software Requirements
+
+- **Operating System**: Ubuntu 20.04+ or Debian-based Linux distribution
+- **Network Access**: Internet connectivity for downloading packages
+- **Git**: For cloning the FluxCD repository
+- **GitHub Account**: For Flux GitOps integration
+
+## System Configuration
+
+Before installing Kubernetes components, several system-level configurations must be applied.
+
+### Enable IP Forwarding
+
+<Steps>
+  <Step title="Configure IP forwarding">
+    IP forwarding is required for Kubernetes networking to function properly.
+
+    ```bash
+    # Permanent (add to sysctl.conf)
+    echo "net.ipv4.ip_forward=1" | sudo tee -a /etc/sysctl.conf
+    sudo sysctl -p
+    ```
+  </Step>
+
+  <Step title="Verify configuration">
+    Confirm that IP forwarding is enabled:
+
+    ```bash
+    cat /proc/sys/net/ipv4/ip_forward
+    # Should return: 1
+    ```
+  </Step>
+</Steps>
+
+### Disable Swap
+
+<Warning>
+Kubernetes requires swap to be disabled on all nodes. This is a mandatory requirement.
+</Warning>
+
+<Steps>
+  <Step title="Turn off swap immediately">
+    ```bash
+    sudo swapoff -a
+    ```
+  </Step>
+
+  <Step title="Disable swap permanently">
+    Comment out swap entries in /etc/fstab to prevent swap from re-enabling on reboot:
+
+    ```bash
+    sudo sed -i '/swap/s/^/#/' /etc/fstab
+    sudo systemctl mask swap.target
+    ```
+  </Step>
+
+  <Step title="Verify swap is disabled">
+    ```bash
+    swapon --show
+    # Should return no output
+    ```
+  </Step>
+</Steps>
+
+### Configure Containerd
+
+<Steps>
+  <Step title="Generate default configuration">
+    ```bash
+    sudo containerd config default > /etc/containerd/config.toml
+    ```
+  </Step>
+
+  <Step title="Enable SystemdCgroup">
+    Edit `/etc/containerd/config.toml` and set `SystemdCgroup = true` in the runc options section:
+
+    ```toml /etc/containerd/config.toml
+    version = 2
+
+    [plugins]
+
+      [plugins."io.containerd.grpc.v1.cri"]
+
+        [plugins."io.containerd.grpc.v1.cri".containerd]
+
+          [plugins."io.containerd.grpc.v1.cri".containerd.runtimes]
+
+            [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc]
+
+              runtime_type = "io.containerd.runc.v2"
+
+              [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc.options]
+
+                SystemdCgroup = true
+    ```
+  </Step>
+
+  <Step title="Restart containerd">
+    ```bash
+    sudo systemctl restart containerd
+    sudo systemctl enable containerd
+    ```
+  </Step>
+</Steps>
+
+## Install Required Packages
+
+<Steps>
+  <Step title="Update system packages">
+    ```bash
+    sudo apt-get update
+    sudo apt-get upgrade -y
+    ```
+  </Step>
+
+  <Step title="Install dependencies">
+    ```bash
+    # apt-transport-https may be a dummy package; if so, you can skip that package
+    sudo apt-get install -y apt-transport-https ca-certificates curl gpg
+    ```
+  </Step>
+</Steps>
+
+## Network Planning
+
+### IP Address Allocation
+
+Plan your network IP addresses before installation:
+
+- **Control Plane API Server**: 192.168.0.101 (example)
+- **Pod Network CIDR**: 10.1.0.0/16
+- **Service CIDR**: 10.96.0.0/12 (default)
+
+<Note>
+Adjust these IP ranges to match your network infrastructure and avoid conflicts with existing networks.
+</Note>
+
+## Next Steps
+
+Once all prerequisites are met, proceed to [Cluster Installation](/setup/cluster-installation) to install Kubernetes components.
