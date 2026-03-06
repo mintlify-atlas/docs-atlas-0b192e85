@@ -1,0 +1,318 @@
+---
+title: "VPN with Tailscale"
+description: "Secure remote access to the cluster with Tailscale VPN operator"
+---
+
+## Overview
+
+Tailscale provides secure VPN access to the Kubernetes cluster and its services. The Tailscale operator manages subnet routing and service exposure, allowing authorized devices to access cluster resources remotely without complex firewall configurations.
+
+## HelmRelease Configuration
+
+Tailscale is deployed using the Tailscale operator Helm chart:
+
+```yaml overlays/base/tailscale/helmrelease.yaml
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: tailscale-operator
+spec:
+  interval: 5m
+  chart:
+    spec:
+      chart: tailscale-operator
+      version: "=1.92.4"
+      sourceRef:
+        kind: HelmRepository
+        name: tailscale
+```
+
+<Note>
+  Tailscale operator version 1.92.4 is installed from the official Tailscale Helm repository.
+</Note>
+
+## Subnet Router Configuration
+
+The cluster uses a Tailscale Connector resource to advertise subnet routes:
+
+```yaml overlays/kimawesome/infrastructure/vpn/router/router.yaml
+apiVersion: tailscale.com/v1alpha1
+kind: Connector
+metadata:
+  name: subnet-router
+spec:
+  subnetRouter:
+    advertiseRoutes:
+      - 192.168.0.0/16
+      - 192.168.10.3/32
+```
+
+### Advertised Routes
+
+<ParamField path="192.168.0.0/16" type="string">
+  Local network range containing cluster nodes and services
+</ParamField>
+
+<ParamField path="192.168.10.3/32" type="string">
+  Specific host IP for targeted access
+</ParamField>
+
+## Service Exposure
+
+Services can be exposed via Tailscale using service annotations:
+
+```yaml overlays/kimawesome/applications/dns-server/tailscale-service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: bind9-tailscale
+  annotations:
+    tailscale.com/expose: "true"
+spec:
+  type: LoadBalancer
+  loadBalancerClass: tailscale
+  selector:
+    app: bind9
+  ports:
+    - name: dns-tcp
+      port: 53
+      protocol: TCP
+    - name: dns-udp
+      port: 53
+      protocol: UDP
+```
+
+<Note>
+  Setting `loadBalancerClass: tailscale` directs the LoadBalancer to use Tailscale instead of MetalLB, making the service accessible only to authorized Tailscale network members.
+</Note>
+
+## Authentication
+
+The Tailscale operator requires authentication credentials stored in a Kubernetes secret:
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: operator-oauth
+  namespace: tailscale
+stringData:
+  client_id: <your-oauth-client-id>
+  client_secret: <your-oauth-client-secret>
+```
+
+<Steps>
+  <Step title="Create OAuth Client">
+    Generate OAuth credentials in the Tailscale admin console under Settings → OAuth clients
+  </Step>
+  
+  <Step title="Seal the Secret">
+    Use sealed-secrets to encrypt the OAuth credentials for Git storage:
+    ```bash
+    kubectl create secret generic operator-oauth \
+      --namespace=tailscale \
+      --from-literal=client_id=<your-id> \
+      --from-literal=client_secret=<your-secret> \
+      --dry-run=client -o yaml | \
+    kubeseal --format=yaml > sealed-operator-oauth.yaml
+    ```
+  </Step>
+  
+  <Step title="Commit to Git">
+    Add the sealed secret to your repository and let Flux apply it
+  </Step>
+</Steps>
+
+## Access Control
+
+Tailscale provides several access control mechanisms:
+
+### ACL Tags
+
+Tag the subnet router to control which Tailscale users can access it:
+
+```json
+{
+  "tagOwners": {
+    "tag:k8s-operator": ["your-email@example.com"]
+  },
+  "acls": [
+    {
+      "action": "accept",
+      "src": ["group:admins"],
+      "dst": ["tag:k8s-operator:*"]
+    }
+  ]
+}
+```
+
+### Service-Level Access
+
+Control access to individual exposed services using Tailscale ACLs referencing service hostnames.
+
+## Verification
+
+<Steps>
+  <Step title="Check Operator Status">
+    Verify the Tailscale operator is running:
+    ```bash
+    kubectl get pods -n tailscale
+    kubectl logs -n tailscale -l app=tailscale-operator
+    ```
+  </Step>
+  
+  <Step title="Check Connector Status">
+    Verify the subnet router is advertising routes:
+    ```bash
+    kubectl get connector -n tailscale
+    kubectl describe connector subnet-router -n tailscale
+    ```
+  </Step>
+  
+  <Step title="Verify Routes in Tailscale">
+    Check the Tailscale admin console to confirm subnet routes are visible and approved
+  </Step>
+  
+  <Step title="Test Connectivity">
+    From a device on your Tailscale network, test connectivity:
+    ```bash
+    # Ping a cluster node
+    ping 192.168.0.101
+    
+    # Test DNS service
+    dig @192.168.10.3 example.kim.tec.br
+    ```
+  </Step>
+</Steps>
+
+## Use Cases
+
+<CardGroup cols={2}>
+  <Card title="Remote Administration" icon="terminal">
+    Access kubectl, SSH, and cluster services from anywhere securely
+  </Card>
+  
+  <Card title="Service Exposure" icon="network-wired">
+    Expose services to authorized users without public internet exposure
+  </Card>
+  
+  <Card title="Multi-Site Access" icon="building">
+    Connect multiple sites or home labs securely
+  </Card>
+  
+  <Card title="Developer Access" icon="code">
+    Allow developers to access development services remotely
+  </Card>
+</CardGroup>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Connector not advertising routes">
+    Check the Connector resource status:
+    ```bash
+    kubectl describe connector subnet-router -n tailscale
+    ```
+    
+    Common issues:
+    - OAuth credentials are incorrect or expired
+    - Routes need to be manually approved in Tailscale admin console
+    - Subnet router needs IP forwarding enabled on the node
+  </Accordion>
+  
+  <Accordion title="Service not accessible via Tailscale">
+    Verify the service has the correct annotations:
+    ```bash
+    kubectl get svc -n <namespace> -o yaml | grep -A 2 annotations
+    ```
+    
+    Check that `tailscale.com/expose: "true"` is set and `loadBalancerClass: tailscale` is configured.
+  </Accordion>
+  
+  <Accordion title="Operator pods crash looping">
+    Check operator logs:
+    ```bash
+    kubectl logs -n tailscale -l app=tailscale-operator --tail=100
+    ```
+    
+    Common causes:
+    - Missing or invalid OAuth secret
+    - Insufficient RBAC permissions
+    - Network policy blocking operator communication
+  </Accordion>
+</AccordionGroup>
+
+## Security Considerations
+
+<Warning>
+  Tailscale provides encrypted access to your cluster. However:
+  - Ensure OAuth credentials are properly sealed before committing to Git
+  - Review and approve subnet routes in the Tailscale admin console
+  - Use ACL tags to restrict access to authorized users only
+  - Regularly audit connected devices and remove unused ones
+</Warning>
+
+### Best Practices
+
+<Tip>
+  - Use separate OAuth clients for different clusters
+  - Enable MFA for Tailscale user accounts with cluster access
+  - Monitor Tailscale audit logs for suspicious activity
+  - Rotate OAuth credentials periodically
+  - Use ACL tags to implement least-privilege access
+</Tip>
+
+## Configuration Reference
+
+### Connector Spec
+
+<ParamField path="subnetRouter" type="object" required>
+  Configuration for advertising subnet routes to the Tailscale network
+  
+  <Expandable title="properties">
+    <ParamField path="advertiseRoutes" type="array[string]" required>
+      List of CIDR ranges to advertise (e.g., `["192.168.0.0/16"]`)
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+### Service Annotations
+
+<ParamField path="tailscale.com/expose" type="string">
+  Set to `"true"` to expose the service via Tailscale
+</ParamField>
+
+<ParamField path="tailscale.com/hostname" type="string">
+  Optional custom hostname for the exposed service (defaults to service name)
+</ParamField>
+
+<ParamField path="tailscale.com/tags" type="string">
+  Comma-separated list of ACL tags to apply to the service
+</ParamField>
+
+## Related Resources
+
+<CardGroup cols={2}>
+  <Card title="Sealed Secrets" icon="lock" href="/infrastructure/sealed-secrets">
+    Learn how to encrypt OAuth credentials for Git storage
+  </Card>
+  
+  <Card title="Networking" icon="network-wired" href="/infrastructure/networking">
+    Understand cluster networking with Cilium
+  </Card>
+  
+  <Card title="Load Balancer" icon="scale-balanced" href="/infrastructure/load-balancer">
+    Learn about MetalLB for public service exposure
+  </Card>
+  
+  <Card title="DNS Server" icon="globe" href="/applications/dns-server">
+    See how DNS is exposed via Tailscale
+  </Card>
+</CardGroup>
+
+## External Documentation
+
+- [Tailscale Documentation](https://tailscale.com/kb/)
+- [Tailscale Kubernetes Operator](https://tailscale.com/kb/1236/kubernetes-operator)
+- [Tailscale ACLs](https://tailscale.com/kb/1018/acls)
+- [Subnet Routers](https://tailscale.com/kb/1019/subnets)

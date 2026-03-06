@@ -56,7 +56,8 @@
               "infrastructure/cert-manager",
               "infrastructure/sealed-secrets",
               "infrastructure/metrics-server",
-              "infrastructure/gateway-api"
+              "infrastructure/gateway-api",
+              "infrastructure/vpn"
             ]
           },
           {
